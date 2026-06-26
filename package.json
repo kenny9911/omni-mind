@@ -1,0 +1,42 @@
+{
+  "name": "omni-mind",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx lib/server/db/migrate.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "restart": "bash scripts/restart.sh",
+    "stop": "bash scripts/restart.sh --stop",
+    "cleanup:seed": "tsx scripts/cleanup-seed.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.87",
+    "@ai-sdk/deepseek": "^2.0.40",
+    "@ai-sdk/google": "^3.0.84",
+    "@ai-sdk/openai": "^3.0.75",
+    "@ai-sdk/openai-compatible": "^2.0.52",
+    "@libsql/client": "^0.17.4",
+    "ai": "^6.0.207",
+    "drizzle-orm": "^0.45.2",
+    "next": "^16.2.9",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "drizzle-kit": "^0.31.10",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  }
+}

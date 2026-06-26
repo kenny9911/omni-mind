@@ -1,0 +1,201 @@
+/* OmniMind — design tokens ported verbatim from the Claude Design handoff */
+
+:root {
+  --bg: #09090f;
+  --bg-elev: #0d0d16;
+  --surface: #13131e;
+  --surface-2: #1b1b29;
+  --surface-3: #23233480;
+  --border: rgba(255, 255, 255, 0.07);
+  --border-2: rgba(255, 255, 255, 0.13);
+  --text: #ededf4;
+  --muted: #9696a8;
+  --faint: #5d5d6c;
+  --accent: #7c6cff;
+  --accent-2: #42d6ff;
+  --accent-soft: rgba(124, 108, 255, 0.15);
+  --success: #3ad19b;
+  --danger: #ff6a6a;
+  --warn: #ffb454;
+  --shadow: 0 10px 34px rgba(0, 0, 0, 0.45);
+}
+
+[data-theme="light"] {
+  --bg: #f5f5f9;
+  --bg-elev: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f1f1f7;
+  --surface-3: #f6f6fb;
+  --border: rgba(15, 15, 40, 0.09);
+  --border-2: rgba(15, 15, 40, 0.15);
+  --text: #16161f;
+  --muted: #62626f;
+  --faint: #9a9aa8;
+  --accent: #6a55ff;
+  --accent-2: #159fd6;
+  --accent-soft: rgba(106, 85, 255, 0.11);
+  --success: #13a06a;
+  --danger: #df4438;
+  --warn: #cf8410;
+  --shadow: 0 10px 30px rgba(25, 25, 60, 0.1);
+}
+
+/* Auth screen uses a slightly heavier border + shadow palette */
+[data-auth] {
+  --border: rgba(255, 255, 255, 0.08);
+  --border-2: rgba(255, 255, 255, 0.14);
+  --shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+}
+[data-auth][data-theme="light"] {
+  --bg: #eef0f6;
+  --border: rgba(15, 15, 40, 0.1);
+  --border-2: rgba(15, 15, 40, 0.16);
+  --shadow: 0 18px 50px rgba(25, 25, 60, 0.14);
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+body {
+  background: #09090f;
+  color: var(--text);
+  font-family: "Manrope", "Noto Sans SC", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: rgba(124, 108, 255, 0.32);
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-2);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--faint);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+textarea::placeholder,
+input::placeholder {
+  color: var(--faint);
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes dotpulse {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes gradmove {
+  to {
+    background-position: 200% 50%;
+  }
+}
+@keyframes glow {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.95;
+  }
+}
+@keyframes floaty {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+@keyframes orb {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(30px, -20px) scale(1.1);
+  }
+}
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Sidebar recent-conversation rename/delete affordances (reveal on hover). */
+.recent-actions {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.recent-row:hover .recent-actions,
+.recent-row:focus-within .recent-actions {
+  opacity: 1;
+}
+.recent-actions button:hover {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+}
+
+/* User-message copy/edit affordances (reveal on hover). */
+.user-msg-actions {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.user-msg:hover .user-msg-actions,
+.user-msg:focus-within .user-msg-actions {
+  opacity: 1;
+}
+.user-msg-actions button:hover {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+}

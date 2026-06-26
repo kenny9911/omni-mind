@@ -1,0 +1,18 @@
+/node_modules
+/.next
+/out
+/build
+next-env.d.ts
+*.tsbuildinfo
+.DS_Store
+.env*.local
+.vercel
+
+# local database + test artifacts
+/.data
+/test-results
+/playwright-report
+
+# design handoff reference (not part of the app)
+/_handoff
+/design_*.html
