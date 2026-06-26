@@ -58,7 +58,7 @@ demos, tests, and ships from a single coherent codebase.
 - **G4 — Exact cost accounting.** Per-call token counts × per-1M model pricing + ¥0.05 fee,
   stored as integer micro-cents, aggregated into the same totals the UI shows today.
 - **G5 — Durable product state.** Conversations/messages, model enable/main state,
-  preferences, subscription, and invoices persist in libSQL via Drizzle.
+  preferences, subscription, and invoices persist in PostgreSQL via Drizzle.
 - **G6 — Pervasive observability.** Every request → one `activity_logs` row; every model call
   → one `usage_records` row; both queryable and exportable.
 - **G7 — Keyless runnability.** `LLM_MODE=mock` (default) reproduces the existing content
@@ -363,7 +363,7 @@ from the SDK's normalized `usage`. Tracing to user stories is shown in brackets.
   the fusion stage starts only after all experts finish. End-to-end wall-clock should approximate
   the slowest expert + fusion, not the sum.
 - **NFR-4 (read-path latency).** Non-streaming GETs (usage, models, billing, conversations,
-  activity) respond **p95 < 200 ms** against the local libSQL DB for a typical user dataset.
+  activity) respond **p95 < 200 ms** against the PostgreSQL DB for a typical user dataset.
 - **NFR-5 (mock determinism).** With `LLM_MODE=mock` and a fixed seed, content and token counts
   are deterministic, enabling exact-value assertions in tests and CI with zero keys.
 
@@ -406,15 +406,16 @@ from the SDK's normalized `usage`. Tracing to user stories is shown in brackets.
   existing dictionaries. Numeric/money/time formatting matches `fmtNum`/`fmtMoney`/`fmtTime`.
 
 ### Portability & testability
-- **NFR-20.** libSQL via Drizzle locally (`file:./.data/omnimind.db`); driver-swappable to
-  Turso/Neon without query changes. Integration tests invoke Route Handlers directly against a
-  temp/in-memory DB; e2e via Playwright against `next dev`.
+- **NFR-20.** PostgreSQL via Drizzle, configured by a required `DATABASE_URL` (`postgres://`)
+  connection string; any compatible Postgres (Neon, Supabase, RDS, self-hosted) works without
+  query changes. Integration tests invoke Route Handlers directly against an in-process
+  PostgreSQL (`@electric-sql/pglite`); e2e via Playwright against `next dev`.
 
 ---
 
 ## 7. Data & Privacy
 
-### Core entities (libSQL via Drizzle; ids `crypto.randomUUID()`, timestamps epoch-ms UTC; money in micro-cents)
+### Core entities (PostgreSQL via Drizzle; ids `crypto.randomUUID()`, timestamps epoch-ms UTC; money in micro-cents)
 - **users** — `id, email (unique), name, passwordHash, salt, planId, createdAt`.
 - **sessions** — `id, userId, expiresAt, createdAt` (opaque token in httpOnly cookie).
 - **preferences** — `userId, theme, lang, mode, auto, mainModel, trio (json), deepResearch,
@@ -489,7 +490,7 @@ from the SDK's normalized `usage`. Tracing to user stories is shown in brackets.
 ## 9. Assumptions & Risks
 
 ### Assumptions
-- **A1.** The frozen stack (Next.js Route Handlers, Drizzle/libSQL, Vercel AI SDK v6 + Gateway,
+- **A1.** The frozen stack (Next.js Route Handlers, Drizzle/PostgreSQL, Vercel AI SDK v6 + Gateway,
   session auth, mock mode) is final and is used as written.
 - **A2.** Model names/prices are illustrative placeholders; the **server registry mirrors
   `lib/models.ts`** and is authoritative server-side.

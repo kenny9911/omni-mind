@@ -4,7 +4,7 @@ A compound multi-agent platform that routes to the right model, or fuses multipl
 experts in parallel, with precise token-level cost accounting. Implemented from a
 [Claude Design](https://claude.ai/design) handoff (`OmniMind.dc.html`) in **Next.js 16
 (App Router) · React 19 · TypeScript**, with a **full backend** (REST + streaming APIs,
-libSQL/Drizzle persistence, scrypt auth, the Vercel AI SDK with a keyless mock mode, and
+PostgreSQL/Drizzle persistence, scrypt auth, the Vercel AI SDK with a keyless mock mode, and
 pervasive activity/usage logging) wired **end-to-end** to the UI.
 
 **Status:** frontend + backend are integrated and verified — `npx tsc` clean, **194 tests
@@ -36,7 +36,7 @@ usage/cost ledger → session persistence) confirmed in a browser.
 ```bash
 npm install
 cp .env.example .env.local   # keyless mock LLM mode by default
-npm run db:migrate           # create the local libSQL DB (auto-runs on first request too)
+npm run db:migrate           # create the PostgreSQL tables (auto-runs on first request too)
 npm run dev                  # http://localhost:3000  → redirects to /login
 npm run build                # production build
 npm test                     # 194 backend + integration tests (Vitest)
@@ -68,7 +68,7 @@ app/api/
   billing/{subscription,plans,invoices,topup,payment-method}   conversations{,/[id]{,/messages}}
   preferences   orchestration
 lib/server/
-  db/         Drizzle schema + libSQL client (auto-migrating) + seed
+  db/         Drizzle schema + PostgreSQL client (auto-migrating) + seed
   http.ts     route() wrapper: request-id, auth guard, zod, timing, one activity_logs row/request
   auth/       scrypt passwords + DB-backed sessions + guards
   llm/        registry · router · gateway · fusion (orchestrator) · mock · cost (micro-CNY)

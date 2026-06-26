@@ -29,6 +29,12 @@ export const POST = route(
       throw new ApiError(401, "AUTH_INVALID", "Invalid email or password");
     }
 
+    // Credentials are correct but the account is suspended — surface a clear, distinct
+    // reason (only reachable after a valid password, so this leaks nothing to attackers).
+    if (user.status === "suspended") {
+      throw new ApiError(403, "ACCOUNT_SUSPENDED", "This account has been suspended. Contact your administrator.");
+    }
+
     const { cookie } = await createSession(
       ctx.db,
       user.id,

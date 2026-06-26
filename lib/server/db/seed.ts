@@ -13,8 +13,11 @@ import { currentMonthRange } from "../util";
  * an active subscription. No invoices, payment method, or usage are seeded — every
  * account starts genuinely clean (real data accrues from real activity).
  */
+/** A drizzle transaction handle is accepted anywhere a DB is, so seeding can run atomically. */
+type DbOrTx = DB | Parameters<Parameters<DB["transaction"]>[0]>[0];
+
 export async function seedNewUser(
-  db: DB,
+  db: DbOrTx,
   userId: string,
   opts: { lang?: Lang; planId?: PlanId } = {},
 ): Promise<void> {

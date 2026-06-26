@@ -12,7 +12,7 @@ import { ApiError } from "@/lib/server/http";
 describe("sseResponse error sanitization (G24)", () => {
   it("collapses an unexpected throw to a generic INTERNAL frame (no leak)", async () => {
     const res = sseResponse("req-1", async () => {
-      throw new Error("libsql: SELECT * FROM users — secret internal detail");
+      throw new Error("postgres: SELECT * FROM users — secret internal detail");
     });
     const events = await readSse(res);
     const err = events.find((e) => e.event === "error");
@@ -42,13 +42,15 @@ describe("sseResponse error sanitization (G24)", () => {
     expect(err!.data.message).toBe("Main model is disabled");
   });
 
-  it("does NOT forward a non-allow-listed coded driver error (e.g. SQLITE_*)", async () => {
+  it("does NOT forward a non-allow-listed coded driver error (e.g. a Postgres SQLSTATE)", async () => {
     const res = sseResponse("req-4", async () => {
-      throw Object.assign(new Error("SQLITE_ERROR: near \"FORM\": syntax error"), { code: "SQLITE_ERROR" });
+      // 42601 = Postgres syntax_error; not ApiError and not in SAFE_SSE_CODES → must be collapsed.
+      throw Object.assign(new Error('syntax error at or near "FORM"'), { code: "42601" });
     });
     const err = (await readSse(res)).find((e) => e.event === "error");
     expect(err!.data.code).toBe("INTERNAL");
     expect(err!.data.message).toBe("Internal error");
-    expect(JSON.stringify(err!.data)).not.toContain("SQLITE");
+    expect(JSON.stringify(err!.data)).not.toContain("42601");
+    expect(JSON.stringify(err!.data)).not.toContain("syntax error");
   });
 });

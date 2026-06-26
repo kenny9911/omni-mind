@@ -18,6 +18,16 @@ function authErrorMessage(code: string, lang: "zh" | "en"): string {
     AUTH_EMAIL_TAKEN: { zh: "该邮箱已被注册", en: "That email is already registered" },
     VALIDATION_ERROR: { zh: "请检查输入内容", en: "Please check your input" },
     SSO_UNAVAILABLE: { zh: "第三方登录暂不可用", en: "SSO is unavailable" },
+    // SSO / Google OAuth outcomes (the callback redirects to /login?sso_error=<code>).
+    SSO_NOT_CONFIGURED: { zh: "第三方登录尚未配置", en: "Single sign-on isn't configured" },
+    not_configured: { zh: "Google 登录尚未配置", en: "Google sign-in isn't configured" },
+    denied: { zh: "已取消 Google 登录", en: "Google sign-in was cancelled" },
+    state: { zh: "登录会话已过期，请重试", en: "Sign-in session expired — please try again" },
+    exchange: { zh: "无法完成 Google 登录，请重试", en: "Couldn't complete Google sign-in — please try again" },
+    unverified: { zh: "该 Google 邮箱未验证", en: "That Google email isn't verified" },
+    use_password: { zh: "该邮箱已用密码注册，请先用密码登录", en: "This email has a password — sign in with your password first" },
+    account_conflict: { zh: "该邮箱已绑定其他 Google 账户", en: "This email is linked to a different Google account" },
+    suspended: { zh: "该账户已被停用", en: "This account has been suspended" },
   };
   const m = M[code];
   return m ? m[lang] : lang === "zh" ? "出了点问题，请重试" : "Something went wrong, please try again";
@@ -143,6 +153,8 @@ export default function AuthScreen() {
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Google sign-in is enabled only when the backend reports OAuth is configured.
+  const [googleOn, setGoogleOn] = useState(false);
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -150,6 +162,28 @@ export default function AuthScreen() {
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
+  }, []);
+
+  // On mount: learn which SSO providers are live, and surface any ?sso_error from a
+  // failed OAuth round-trip (the callback bounces back to /login?sso_error=<code>).
+  useEffect(() => {
+    api.auth
+      .providers()
+      .then((p) => setGoogleOn(Boolean(p.providers?.google)))
+      .catch(() => {});
+    try {
+      const code = new URLSearchParams(window.location.search).get("sso_error");
+      if (code) {
+        setErr(authErrorMessage(code, lang));
+        const url = new URL(window.location.href);
+        url.searchParams.delete("sso_error");
+        window.history.replaceState({}, "", url.toString());
+      }
+    } catch {
+      /* no-op */
+    }
+    // lang is read once at mount for the initial error; intentionally not re-run on lang change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function goToApp() {
@@ -196,6 +230,17 @@ export default function AuthScreen() {
   async function onSso(provider: SsoProvider) {
     if (loading) return;
     setErr(null);
+    // Google uses a real OAuth redirect flow (full-page navigation to the start route,
+    // which 302s to Google's consent screen). The other providers aren't wired yet.
+    if (provider === "google") {
+      if (!googleOn) {
+        setErr(authErrorMessage("SSO_NOT_CONFIGURED", lang));
+        return;
+      }
+      setLoading(true);
+      window.location.href = api.auth.googleStartUrl;
+      return;
+    }
     setLoading(true);
     try {
       await api.auth.sso(provider);

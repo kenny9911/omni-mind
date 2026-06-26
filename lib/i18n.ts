@@ -155,6 +155,32 @@ export interface Dict {
   deleteUser: string;
   confirmDelete: string;
   noUsers: string;
+  colStatus: string;
+  statusActive: string;
+  statusSuspended: string;
+  newUser: string;
+  createUserTitle: string;
+  formName: string;
+  formEmail: string;
+  formPassword: string;
+  formRole: string;
+  formPlan: string;
+  create: string;
+  creating: string;
+  cancel: string;
+  resetPassword: string;
+  resetPwPrompt: string;
+  passwordTooShort: string;
+  suspend: string;
+  reactivate: string;
+  confirmSuspend: string;
+  errEmailTaken: string;
+  errValidation: string;
+  errDemoteSelf: string;
+  errSuspendSelf: string;
+  errDeleteSelf: string;
+  errModifySystem: string;
+  errForbidden: string;
   researchSteps: string[];
 }
 
@@ -199,6 +225,14 @@ const D: Record<Lang, Omit<Dict, "researchSteps">> = {
     userMgmtTitle: "用户管理", userMgmtSub: "管理全部用户的角色、套餐与访问权限",
     colUser: "用户", colRole: "角色", colPlan: "套餐", colCalls: "调用次数", colSpend: "消费", colJoined: "注册时间", colLastActive: "最近活跃", colActions: "操作",
     roleUser: "普通用户", roleAdmin: "管理员", deleteUser: "删除", confirmDelete: "确定删除该用户？此操作不可撤销。", noUsers: "暂无用户",
+    colStatus: "状态", statusActive: "正常", statusSuspended: "已停用",
+    newUser: "新建用户", createUserTitle: "创建新账户",
+    formName: "姓名", formEmail: "邮箱", formPassword: "密码", formRole: "角色", formPlan: "套餐",
+    create: "创建", creating: "创建中…", cancel: "取消",
+    resetPassword: "重置密码", resetPwPrompt: "为该用户输入新密码（至少 8 位）：", passwordTooShort: "密码至少需要 8 位字符",
+    suspend: "停用", reactivate: "恢复", confirmSuspend: "确定停用该账户？该用户将被登出且无法登录。",
+    errEmailTaken: "该邮箱已被注册", errValidation: "请检查输入内容", errDemoteSelf: "无法移除自己的管理员角色",
+    errSuspendSelf: "无法停用自己的账户", errDeleteSelf: "无法删除自己的账户", errModifySystem: "系统账户不可修改", errForbidden: "需要管理员权限",
   },
   en: {
     tagline: "Twelve models · one best answer", newChat: "New chat", recent: "Recent",
@@ -240,6 +274,14 @@ const D: Record<Lang, Omit<Dict, "researchSteps">> = {
     userMgmtTitle: "User Management", userMgmtSub: "Manage roles, plans and access for every user",
     colUser: "User", colRole: "Role", colPlan: "Plan", colCalls: "Calls", colSpend: "Spend", colJoined: "Joined", colLastActive: "Last active", colActions: "Actions",
     roleUser: "User", roleAdmin: "Admin", deleteUser: "Delete", confirmDelete: "Delete this user? This cannot be undone.", noUsers: "No users",
+    colStatus: "Status", statusActive: "Active", statusSuspended: "Suspended",
+    newUser: "New user", createUserTitle: "Create a new account",
+    formName: "Name", formEmail: "Email", formPassword: "Password", formRole: "Role", formPlan: "Plan",
+    create: "Create", creating: "Creating…", cancel: "Cancel",
+    resetPassword: "Reset password", resetPwPrompt: "Enter a new password (min 8 characters) for this user:", passwordTooShort: "Password must be at least 8 characters",
+    suspend: "Suspend", reactivate: "Reactivate", confirmSuspend: "Suspend this account? The user will be signed out and unable to log in.",
+    errEmailTaken: "A user with this email already exists", errValidation: "Please check the form fields", errDemoteSelf: "You cannot remove your own admin role",
+    errSuspendSelf: "You cannot suspend your own account", errDeleteSelf: "You cannot delete your own account", errModifySystem: "System accounts cannot be modified", errForbidden: "Admin access required",
   },
   "zh-TW": {
     tagline: "十二大模型 · 一個最優解", newChat: "新建對話", recent: "近期對話",
@@ -281,6 +323,14 @@ const D: Record<Lang, Omit<Dict, "researchSteps">> = {
     userMgmtTitle: "用戶管理", userMgmtSub: "管理所有用戶的角色、方案與存取權限",
     colUser: "用戶", colRole: "角色", colPlan: "方案", colCalls: "調用次數", colSpend: "消費", colJoined: "註冊時間", colLastActive: "最近活躍", colActions: "操作",
     roleUser: "一般用戶", roleAdmin: "管理員", deleteUser: "刪除", confirmDelete: "確定刪除該用戶？此操作無法復原。", noUsers: "暫無用戶",
+    colStatus: "狀態", statusActive: "正常", statusSuspended: "已停用",
+    newUser: "新增用戶", createUserTitle: "建立新帳戶",
+    formName: "姓名", formEmail: "電子郵件", formPassword: "密碼", formRole: "角色", formPlan: "方案",
+    create: "建立", creating: "建立中…", cancel: "取消",
+    resetPassword: "重設密碼", resetPwPrompt: "為該用戶輸入新密碼（至少 8 位）：", passwordTooShort: "密碼至少需要 8 個字元",
+    suspend: "停用", reactivate: "恢復", confirmSuspend: "確定停用該帳戶？該用戶將被登出且無法登入。",
+    errEmailTaken: "該電子郵件已被註冊", errValidation: "請檢查輸入內容", errDemoteSelf: "無法移除自己的管理員角色",
+    errSuspendSelf: "無法停用自己的帳戶", errDeleteSelf: "無法刪除自己的帳戶", errModifySystem: "系統帳戶不可修改", errForbidden: "需要管理員權限",
   },
   ja: {
     tagline: "12 のモデル · ひとつの最適解", newChat: "新規チャット", recent: "最近",
@@ -322,6 +372,14 @@ const D: Record<Lang, Omit<Dict, "researchSteps">> = {
     userMgmtTitle: "ユーザー管理", userMgmtSub: "全ユーザーのロール・プラン・アクセスを管理",
     colUser: "ユーザー", colRole: "ロール", colPlan: "プラン", colCalls: "呼出回数", colSpend: "利用額", colJoined: "登録日", colLastActive: "最終活動", colActions: "操作",
     roleUser: "一般ユーザー", roleAdmin: "管理者", deleteUser: "削除", confirmDelete: "このユーザーを削除しますか？この操作は取り消せません。", noUsers: "ユーザーがいません",
+    colStatus: "状態", statusActive: "有効", statusSuspended: "停止中",
+    newUser: "新規ユーザー", createUserTitle: "新しいアカウントを作成",
+    formName: "名前", formEmail: "メール", formPassword: "パスワード", formRole: "ロール", formPlan: "プラン",
+    create: "作成", creating: "作成中…", cancel: "キャンセル",
+    resetPassword: "パスワードをリセット", resetPwPrompt: "このユーザーの新しいパスワード（8 文字以上）を入力：", passwordTooShort: "パスワードは 8 文字以上が必要です",
+    suspend: "停止", reactivate: "再有効化", confirmSuspend: "このアカウントを停止しますか？ユーザーはログアウトされ、ログインできなくなります。",
+    errEmailTaken: "このメールは既に登録されています", errValidation: "入力内容を確認してください", errDemoteSelf: "自分の管理者ロールは解除できません",
+    errSuspendSelf: "自分のアカウントは停止できません", errDeleteSelf: "自分のアカウントは削除できません", errModifySystem: "システムアカウントは変更できません", errForbidden: "管理者権限が必要です",
   },
 };
 

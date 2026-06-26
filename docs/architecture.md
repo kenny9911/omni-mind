@@ -9,7 +9,7 @@
 > React 19 + TypeScript **frontend is already built** (`app/`, `components/`, `lib/`) and is the
 > source of truth for behavior; the in-memory `OmniStore` (`lib/store.ts`) and `selectViewModel`
 > (`lib/viewModel.ts`) define every value the backend must produce. The stack is **frozen** — this
-> architecture honors it exactly: Next.js Route Handlers, Drizzle/libSQL, node:crypto sessions,
+> architecture honors it exactly: Next.js Route Handlers, Drizzle/PostgreSQL, node:crypto sessions,
 > Vercel AI SDK v6 via AI Gateway with a deterministic mock provider, and structured logging into
 > `activity_logs` + `usage_records`.
 
@@ -70,7 +70,7 @@ C4Container
         Container(authsvc, "Auth Service", "lib/server/auth/*", "scrypt password hashing, DB-backed sessions, route guard")
         Container(logsvc, "Logging Service", "lib/server/log/*", "Structured stdout JSON + activity_logs / usage_records writers")
         Container(usagesvc, "Usage & Billing Service", "lib/server/usage/*, lib/server/billing/*", "Aggregates, trend, ledger, cost-by-model, subscription, plans, invoices")
-        ContainerDb(db, "libSQL Database", "Drizzle ORM over @libsql/client", "users, sessions, preferences, model_state, conversations, messages, subscriptions, invoices, payment_methods, activity_logs, usage_records")
+        ContainerDb(db, "PostgreSQL Database", "Drizzle ORM over pg (node-postgres)", "users, sessions, preferences, model_state, conversations, messages, subscriptions, invoices, payment_methods, activity_logs, usage_records")
     }
 
     System_Ext(gateway, "Vercel AI Gateway", "AI SDK v6 'provider/model'")
@@ -209,8 +209,10 @@ lib/client/api.ts                      # typed fetch + SSE client used by the Re
   (one usage row/model call) (FR-41, FR-42, NFR-13).
 
 ### 2.7 Database (`lib/server/db/*`)
-- **`client.ts`** — `@libsql/client` (`file:./.data/omnimind.db` locally; Turso/Neon URL+token in
-  prod). **`schema.ts`** — Drizzle tables (§7.). **`migrate.ts`** — idempotent migrations; self-creates
+- **`client.ts`** — `pg` (node-postgres) via `drizzle-orm/node-postgres`; `DATABASE_URL` is a
+  required `postgres://` connection string (Neon, Supabase, RDS, or self-hosted) with no local/file
+  fallback. Pooler params (pgbouncer/connection_limit/pool_timeout) are parsed and ignored safely.
+  **`schema.ts`** — Drizzle tables (§7.). **`migrate.ts`** — idempotent migrations; self-creates
   schema on first run for local/CI (NFR-18).
 
 ---
@@ -229,7 +231,7 @@ sequenceDiagram
     participant G as guard.ts
     participant Z as zod contract
     participant S as Service (lib/server/*)
-    participant D as libSQL (Drizzle)
+    participant D as PostgreSQL (Drizzle)
     participant L as log/activity.ts
 
     C->>H: HTTP request (cookie)
@@ -283,7 +285,7 @@ sequenceDiagram
     participant FC as Final Compiler (mainModel)
     participant Cost as cost.ts
     participant L as log/activity.ts
-    participant D as libSQL
+    participant D as PostgreSQL
 
     C->>H: POST { mode:"expert", prompt, trio, mainModel, deepResearch }
     H->>D: upsert conversation + user message; create turnId
@@ -355,7 +357,7 @@ sequenceDiagram
     participant M as gateway.callModel (single)
     participant Cost as cost.ts
     participant L as log/activity.ts
-    participant D as libSQL
+    participant D as PostgreSQL
 
     C->>H: POST { mode:"fast", prompt, auto, mainModel, deepResearch }
     H->>D: upsert conversation + user message; create turnId
@@ -523,7 +525,7 @@ flowchart TB
     Browser[User browser - SPA + SSE] -->|HTTPS| Edge
     Browser -->|HTTPS / EventStream| Fn
 
-    Fn -->|Drizzle / @libsql/client| Turso[(libSQL — Turso prod / file:./.data local)]
+    Fn -->|Drizzle / pg (node-postgres)| PG[(PostgreSQL — Neon / Supabase / RDS / self-hosted)]
     Fn -.->|LLM_MODE=gateway| AIGW[Vercel AI Gateway]
     AIGW -.-> Prov[Providers + OpenRouter]
 
@@ -534,7 +536,7 @@ flowchart TB
 | Concern | Local / CI | Production |
 |---------|-----------|-----------|
 | Compute | `next dev` / Vitest direct handler invocation | Vercel Fluid Compute, Node runtime |
-| DB | `file:./.data/omnimind.db` (libSQL file); temp/in-memory in tests | Turso libSQL (URL + auth token); Neon-portable via driver swap |
+| DB | PostgreSQL via `DATABASE_URL` (`postgres://`); in-process pglite (@electric-sql/pglite) in tests | PostgreSQL (Neon / Supabase / RDS / self-hosted) via `DATABASE_URL` |
 | LLM | `LLM_MODE=mock` (deterministic, keyless) | `LLM_MODE=gateway` + `AI_GATEWAY_API_KEY` |
 | Migrations | `npm run db:migrate` (idempotent, self-creating, NFR-18) | run on deploy |
 | e2e | Playwright vs `next dev` | — |
@@ -542,8 +544,7 @@ flowchart TB
 ### Environment variables (from `.env.example`)
 | Var | Purpose | Default |
 |-----|---------|---------|
-| `DATABASE_URL` | libSQL connection | `file:./.data/omnimind.db` |
-| `DATABASE_AUTH_TOKEN` | Turso auth (prod) | unset (local) |
+| `DATABASE_URL` | PostgreSQL connection string (`postgres://`); required | unset (required) |
 | `LLM_MODE` | `mock` \| `gateway` | `mock` |
 | `AI_GATEWAY_API_KEY` | AI Gateway key (gateway mode only) | unset |
 | `PLATFORM_FEE_CNY` | per-call platform fee | `0.05` |
@@ -567,7 +568,7 @@ No code path outside `gateway.ts` ever touches a provider (frozen: llm-sdk-evalu
 - **i18n** — all backend-produced strings (route labels, plan features, mode labels, localized tags)
   honor `lang ∈ {zh, zh-TW, en, ja}` via `pick()` with `en→zh` fallback; numbers/money/time match
   `fmtNum`/`fmtMoney`/`fmtTime` (NFR-19).
-- **Testability** — Vitest invokes Route Handlers directly against a temp/in-memory libSQL DB;
+- **Testability** — Vitest invokes Route Handlers directly against an in-process PostgreSQL (@electric-sql/pglite);
   deterministic mock mode enables exact-value assertions; Playwright covers e2e against `next dev`
   (NFR-20, SM5).
 - **Reliability** — graceful expert degradation, disconnect-safe streaming, idempotent self-creating

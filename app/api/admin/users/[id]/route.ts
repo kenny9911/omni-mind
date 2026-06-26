@@ -1,7 +1,8 @@
 import { eq } from "drizzle-orm";
 import { route, ApiError, parseBody } from "@/lib/server/http";
 import { requireAdmin } from "@/lib/server/auth/guard";
-import { users, subscriptions, usageRecords, activityLogs, userMemory } from "@/lib/server/db/schema";
+import { hashPassword } from "@/lib/server/auth/password";
+import { users, sessions, subscriptions, usageRecords, activityLogs, userMemory } from "@/lib/server/db/schema";
 import { includedCreditFor, type PlanId } from "@/lib/server/billing/plans";
 import { AdminUserPatch } from "@/lib/server/contracts/profile";
 
@@ -24,16 +25,31 @@ export const PATCH = route(
 
     const body = await parseBody(ctx.req, AdminUserPatch);
 
-    // Guard against self-lockout: an admin cannot demote themselves.
+    // Guard against self-lockout: an admin cannot demote or suspend themselves.
     if (body.role === "user" && targetId === admin.id) {
       throw new ApiError(400, "CANNOT_DEMOTE_SELF", "You cannot remove your own admin role");
+    }
+    if (body.status === "suspended" && targetId === admin.id) {
+      throw new ApiError(400, "CANNOT_SUSPEND_SELF", "You cannot suspend your own account");
     }
 
     const patch: Partial<typeof users.$inferInsert> = { updatedAt: ctx.now };
     if (body.name) patch.name = body.name;
     if (body.role) patch.role = body.role;
     if (body.planId) patch.planId = body.planId;
+    if (body.status) patch.status = body.status;
+    if (body.newPassword) {
+      const { hash, salt } = hashPassword(body.newPassword);
+      patch.passwordHash = hash;
+      patch.salt = salt;
+    }
     await ctx.db.update(users).set(patch).where(eq(users.id, targetId));
+
+    // An admin-initiated password reset invalidates the target's active sessions, so the
+    // old credentials can't keep a hijacked session alive — they must sign in afresh.
+    if (body.newPassword) {
+      await ctx.db.delete(sessions).where(eq(sessions.userId, targetId));
+    }
 
     if (body.planId) {
       await ctx.db
@@ -45,7 +61,7 @@ export const PATCH = route(
 
     const [fresh] = await ctx.db.select().from(users).where(eq(users.id, targetId)).limit(1);
     return {
-      user: { id: fresh.id, name: fresh.name, email: fresh.email, role: fresh.role, plan: fresh.planId, isDemo: fresh.isDemo, createdAt: fresh.createdAt },
+      user: { id: fresh.id, name: fresh.name, email: fresh.email, role: fresh.role, plan: fresh.planId, status: fresh.status, isDemo: fresh.isDemo, createdAt: fresh.createdAt },
     };
   },
   { auth: "admin" },

@@ -63,7 +63,12 @@ export async function resolveSession(db: DB, req: Request): Promise<User | null>
     return null;
   }
   const u = await db.select().from(users).where(eq(users.id, sess.userId)).limit(1);
-  return u[0] ?? null;
+  const user = u[0];
+  // A suspended account behaves as logged-out: every auth:"required"/"admin" route 401s,
+  // so the client redirects to /login. Reactivating restores access without re-login (the
+  // session row is left intact, not destroyed).
+  if (!user || user.status === "suspended") return null;
+  return user;
 }
 
 export async function destroySession(db: DB, req: Request): Promise<void> {

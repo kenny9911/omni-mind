@@ -1,53 +1,64 @@
-import { drizzle } from "drizzle-orm/libsql";
-import { createClient, type Client } from "@libsql/client";
-import { existsSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
+import { Pool, type PoolConfig } from "pg";
 import * as schema from "./schema";
 import { DDL, ADDITIVE_MIGRATIONS } from "./ddl";
 
-export type DB = ReturnType<typeof drizzle<typeof schema>>;
+export type DB = NodePgDatabase<typeof schema>;
 export interface DbBundle {
   db: DB;
-  client: Client;
+  pool: Pool;
 }
 
 function resolveUrl(): string {
-  return process.env.DATABASE_URL || "file:./.data/omnimind.db";
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error("DATABASE_URL is not set (expected a postgres:// connection string)");
+  return url;
 }
 
-function ensureFileDir(url: string) {
-  if (url.startsWith("file:")) {
-    const path = url.slice("file:".length);
-    const dir = dirname(path);
-    if (dir && dir !== "." && !existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-  }
+/**
+ * Build an explicit pg PoolConfig from the connection string. We parse the URL ourselves
+ * (rather than passing the raw string) so pooler-specific query params — pgbouncer,
+ * connection_limit, pool_timeout — never reach the Postgres startup packet as unknown
+ * settings. sslmode=disable → no TLS; any other sslmode → TLS (lenient verification).
+ */
+function poolConfig(connectionString: string): PoolConfig {
+  const u = new URL(connectionString);
+  const sslmode = u.searchParams.get("sslmode");
+  const connLimit = Number(u.searchParams.get("connection_limit"));
+  return {
+    host: u.hostname,
+    port: u.port ? Number(u.port) : 5432,
+    user: decodeURIComponent(u.username),
+    password: decodeURIComponent(u.password),
+    database: decodeURIComponent(u.pathname.replace(/^\//, "")),
+    ssl: sslmode && sslmode !== "disable" ? { rejectUnauthorized: false } : false,
+    max: Number.isFinite(connLimit) && connLimit > 0 ? Math.min(connLimit, 20) : 10,
+    application_name: "omnimind",
+  };
 }
 
-/** Create a fresh DB bundle (used by tests for isolation). */
+/** Create a fresh DB bundle (used by the migrate script). */
 export function createDb(url?: string): DbBundle {
-  const dbUrl = url || resolveUrl();
-  ensureFileDir(dbUrl);
-  const client = createClient({
-    url: dbUrl,
-    authToken: process.env.DATABASE_AUTH_TOKEN,
-  });
-  const db = drizzle(client, { schema });
-  return { db, client };
+  const pool = new Pool(poolConfig(url || resolveUrl()));
+  const db = drizzle(pool, { schema });
+  return { db, pool };
 }
 
-/** Apply the idempotent schema + additive column migrations. Safe to run repeatedly. */
-export async function ensureSchema(client: Client): Promise<void> {
-  await client.executeMultiple(DDL);
+/**
+ * Apply the idempotent schema + additive column migrations via a caller-supplied executor.
+ * Shared by the prod pg Pool (ensureSchema) and the pglite test harness — both accept a
+ * multi-statement SQL string. Safe to run repeatedly.
+ */
+export async function applySchema(exec: (sql: string) => Promise<unknown>): Promise<void> {
+  await exec(DDL);
   for (const stmt of ADDITIVE_MIGRATIONS) {
     try {
-      await client.execute(stmt);
+      await exec(stmt);
     } catch (e) {
       const msg = String((e as Error)?.message || e);
-      // A duplicate column means an already-migrated DB — expected, ignore. Anything
-      // else is unexpected: log it but keep applying the remaining migrations.
-      if (!/duplicate column/i.test(msg)) {
+      // ADD COLUMN / CREATE INDEX use IF NOT EXISTS, so "already exists" is expected — ignore.
+      // Anything else is unexpected: log it but keep applying the remaining migrations.
+      if (!/already exists/i.test(msg)) {
         // eslint-disable-next-line no-console
         console.warn("[db] additive migration failed (continuing):", stmt, "—", msg);
       }
@@ -55,11 +66,16 @@ export async function ensureSchema(client: Client): Promise<void> {
   }
 }
 
+/** Apply the idempotent schema + additive column migrations. Safe to run repeatedly. */
+export async function ensureSchema(pool: Pool): Promise<void> {
+  await applySchema((sql) => pool.query(sql));
+}
+
 let ready: Promise<DbBundle> | null = null;
 
 async function init(): Promise<DbBundle> {
   const bundle = createDb();
-  await ensureSchema(bundle.client); // schema is essential — a failure here must surface
+  await ensureSchema(bundle.pool); // schema is essential — a failure here must surface
   // System accounts are a convenience: seed them best-effort so a seeding hiccup never
   // takes down the API for real users.
   try {
@@ -88,9 +104,17 @@ export function getDb(): Promise<DbBundle> {
   return ready;
 }
 
-/** Test hook: drop the memoized instance so a new DATABASE_URL takes effect. */
+/** Test hook: drop the memoized instance. */
 export function __resetDbForTests(): void {
   ready = null;
+}
+
+/**
+ * Test hook: inject an already-prepared DB (e.g. an in-process pglite instance) as the
+ * process-global. Subsequent getDb() calls return it without touching a real Postgres.
+ */
+export function __setDbForTests(db: DB): void {
+  ready = Promise.resolve({ db, pool: undefined as unknown as Pool });
 }
 
 export { schema };

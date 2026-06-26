@@ -1,12 +1,13 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { __resetDbForTests, getDb } from "@/lib/server/db/client";
+import { PGlite } from "@electric-sql/pglite";
+import { drizzle } from "drizzle-orm/pglite";
+import { __setDbForTests, applySchema, type DB } from "@/lib/server/db/client";
+import * as schema from "@/lib/server/db/schema";
+import { seedSystemAccounts } from "@/lib/server/db/seed";
 
 /**
- * Test harness: each test file gets an isolated temp libSQL DB (auto-migrated),
- * a Request builder, and a route-handler invoker. Handler-agnostic — import the
- * real route handlers in the test and pass them to invoke().
+ * Test harness: each test file gets an isolated, in-process PostgreSQL (pglite) — real
+ * Postgres semantics, no network, no shared state — plus a Request builder and a route-
+ * handler invoker. Handler-agnostic — import the real route handlers and pass them to invoke().
  */
 
 // Accepts any Next route-handler shape (route() handlers + dynamic [id] handlers).
@@ -14,14 +15,15 @@ export type RouteHandler = (req: Request, ctx?: any) => Promise<Response>;
 
 const BASE = "http://localhost";
 
-/** Point the process-global DB at a fresh temp file and migrate it. */
+/** Spin up a fresh in-process pglite, apply the schema, seed system accounts, and inject it. */
 export async function setupTestDb(): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), "omni-test-"));
-  process.env.DATABASE_URL = "file:" + join(dir, "test.db");
   // A configured provider so llmConfigured() is true (streamOne is stubbed in setup.ts).
   process.env.AI_GATEWAY_API_KEY = "test-gateway-key";
-  __resetDbForTests();
-  await getDb(); // triggers ensureSchema
+  const pg = new PGlite(); // in-memory, isolated per test file
+  await applySchema((sql) => pg.exec(sql));
+  const db = drizzle(pg, { schema }) as unknown as DB;
+  __setDbForTests(db);
+  await seedSystemAccounts(db);
 }
 
 export interface ReqInit {

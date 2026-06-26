@@ -282,12 +282,18 @@ export interface UserRowVM {
   avatarColor: string;
   role: "user" | "admin";
   planId: "free" | "pro" | "team" | "ent";
+  status: "active" | "suspended";
+  suspended: boolean;
+  statusLabel: string;
   callsStr: string;
   spendStr: string;
   joined: string;
   lastActive: string;
   isSelf: boolean;
+  isSystem: boolean;
   deletable: boolean;
+  suspendable: boolean;
+  resettable: boolean;
 }
 
 export interface ViewModel {
@@ -440,6 +446,15 @@ export interface ViewModel {
   onAdminSetRole: (id: string, role: "user" | "admin") => void;
   onAdminSetPlan: (id: string, planId: "free" | "pro" | "team" | "ent") => void;
   onAdminDeleteUser: (id: string) => void;
+  onAdminResetPassword: (id: string, newPassword: string) => void;
+  onAdminSetStatus: (id: string, status: "active" | "suspended") => void;
+  onAdminCreateUser: (form: {
+    name: string;
+    email: string;
+    password: string;
+    role: "user" | "admin";
+    planId: "free" | "pro" | "team" | "ent";
+  }) => Promise<boolean>;
 }
 
 function viewMessages(store: OmniStore, s: OmniState, t: Dict): MessageVM[] {
@@ -902,6 +917,7 @@ export function selectViewModel(store: OmniStore, s: OmniState): ViewModel {
     const name = String(u?.name ?? email);
     const isSelf = !!s.user && String(u?.id ?? "") === s.user.id;
     const isSystem = SYSTEM_EMAILS.has(email) || !!u?.isDemo;
+    const suspended = u?.status === "suspended";
     return {
       id: String(u?.id ?? ""),
       name,
@@ -910,14 +926,38 @@ export function selectViewModel(store: OmniStore, s: OmniState): ViewModel {
       avatarColor: colorFor(String(u?.id ?? email)),
       role: (u?.role === "admin" ? "admin" : "user") as "user" | "admin",
       planId: (["free", "pro", "team", "ent"].includes(u?.plan) ? u.plan : "free") as "free" | "pro" | "team" | "ent",
+      status: (suspended ? "suspended" : "active") as "active" | "suspended",
+      suspended,
+      statusLabel: suspended ? t.statusSuspended : t.statusActive,
       callsStr: fmtNum(Number(u?.callCount) || 0),
       spendStr: fmtMoney(micro(u?.totalCostMicro)),
       joined: fmtDate(u?.createdAt),
       lastActive: fmtDate(u?.lastActiveAt),
       isSelf,
+      isSystem,
       deletable: !isSelf && !isSystem,
+      suspendable: !isSelf && !isSystem,
+      // Exclude self: an admin resetting their own password would delete their own session
+      // (server invalidates the target's sessions) — self-service lives on the Profile page.
+      resettable: !isSelf && !isSystem,
     };
   });
+
+  // Humanize the admin-action error codes the store stores raw (e.g. "EMAIL_TAKEN").
+  const adminErr = (code: string | null): string | null => {
+    if (!code) return null;
+    const map: Record<string, string> = {
+      EMAIL_TAKEN: t.errEmailTaken,
+      VALIDATION_ERROR: t.errValidation,
+      CANNOT_DEMOTE_SELF: t.errDemoteSelf,
+      CANNOT_SUSPEND_SELF: t.errSuspendSelf,
+      CANNOT_DELETE_SELF: t.errDeleteSelf,
+      CANNOT_MODIFY_SYSTEM: t.errModifySystem,
+      CANNOT_DELETE_SYSTEM: t.errModifySystem,
+      FORBIDDEN: t.errForbidden,
+    };
+    return map[code] ?? code;
+  };
 
   return {
     theme: s.theme,
@@ -1074,9 +1114,12 @@ export function selectViewModel(store: OmniStore, s: OmniState): ViewModel {
 
     users,
     usersLoaded: s.adminUsers !== null,
-    usersError: s.usersError,
+    usersError: adminErr(s.usersError),
     onAdminSetRole: (id, role) => store.adminSetRole(id, role),
     onAdminSetPlan: (id, planId) => store.adminSetPlan(id, planId),
     onAdminDeleteUser: (id) => store.adminDeleteUser(id),
+    onAdminResetPassword: (id, newPassword) => store.adminResetPassword(id, newPassword),
+    onAdminSetStatus: (id, status) => store.adminSetStatus(id, status),
+    onAdminCreateUser: (form) => store.adminCreateUser(form),
   };
 }

@@ -1,7 +1,19 @@
-import { desc } from "drizzle-orm";
-import { route } from "@/lib/server/http";
+import { desc, eq } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { route, json, ApiError, parseBody } from "@/lib/server/http";
 import { requireAdmin } from "@/lib/server/auth/guard";
+import { hashPassword } from "@/lib/server/auth/password";
+import { seedNewUser } from "@/lib/server/db/seed";
 import { users, usageRecords } from "@/lib/server/db/schema";
+import { normalizeEmail } from "@/lib/server/contracts/auth";
+import { AdminUserCreate } from "@/lib/server/contracts/profile";
+
+/** True for a Postgres unique-constraint violation (SQLSTATE 23505), however the driver wraps it. */
+function isUniqueViolation(e: unknown): boolean {
+  const err = e as { code?: string; cause?: { code?: string }; message?: string };
+  const code = err?.code ?? err?.cause?.code;
+  return code === "23505" || /duplicate key value|unique constraint/i.test(String(err?.message ?? ""));
+}
 
 /** GET /api/admin/users — admin: list every user with lifetime usage stats. */
 export const GET = route(
@@ -36,6 +48,7 @@ export const GET = route(
         email: u.email,
         role: u.role,
         plan: u.planId,
+        status: u.status,
         isDemo: u.isDemo,
         createdAt: u.createdAt,
         callCount: e.calls,
@@ -45,6 +58,68 @@ export const GET = route(
     });
 
     return { users: out, total: out.length };
+  },
+  { auth: "admin" },
+);
+
+/** POST /api/admin/users — admin provisions a new account (name/email/password/role/plan). */
+export const POST = route(
+  "admin.users.create",
+  async (ctx) => {
+    requireAdmin(ctx);
+    const body = await parseBody(ctx.req, AdminUserCreate);
+    const email = normalizeEmail(body.email);
+
+    // Friendly fast-path; the unique index is the real guard against a concurrent race below.
+    const existing = await ctx.db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
+    if (existing[0]) throw new ApiError(409, "EMAIL_TAKEN", "A user with this email already exists");
+
+    const id = randomUUID();
+    const { hash, salt } = hashPassword(body.password);
+    try {
+      // One transaction: the account row and its side effects (preferences, 12 model_state
+      // rows, an active subscription) commit together — never a half-provisioned, loginable user.
+      await ctx.db.transaction(async (tx) => {
+        await tx.insert(users).values({
+          id,
+          email,
+          name: body.name,
+          passwordHash: hash,
+          salt,
+          planId: body.planId,
+          role: body.role,
+          status: "active",
+          isDemo: false,
+          createdAt: ctx.now,
+          updatedAt: ctx.now,
+        });
+        await seedNewUser(tx, id, { planId: body.planId });
+      });
+    } catch (e) {
+      // Lost the email race (unique violation) → 409, not a generic 500.
+      if (isUniqueViolation(e)) throw new ApiError(409, "EMAIL_TAKEN", "A user with this email already exists");
+      throw e;
+    }
+    ctx.setMeta({ createdId: id, email, role: body.role, plan: body.planId });
+
+    return json(
+      {
+        user: {
+          id,
+          name: body.name,
+          email,
+          role: body.role,
+          plan: body.planId,
+          status: "active",
+          isDemo: false,
+          createdAt: ctx.now,
+          callCount: 0,
+          totalCostMicro: 0,
+          lastActiveAt: null,
+        },
+      },
+      { status: 201 },
+    );
   },
   { auth: "admin" },
 );

@@ -1,12 +1,15 @@
-import { sqliteTable, text, integer, primaryKey, index, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { pgTable, text, integer, bigint, boolean, primaryKey, index, uniqueIndex } from "drizzle-orm/pg-core";
 
 /**
- * OmniMind data model (libSQL / SQLite) — authoritative per docs/technical-design.md §1.2.
- * ids: uuid strings · times: epoch-ms integers (UTC) · money: integer micro-CNY (1¥ = 1e6).
- * booleans: INTEGER 0|1 · json columns: TEXT (JSON.stringify).
+ * OmniMind data model (PostgreSQL) — authoritative per docs/technical-design.md §1.2.
+ * ids: uuid strings (TEXT) · times: epoch-ms (BIGINT, UTC) · money: micro-CNY (BIGINT, 1¥ = 1e6).
+ * booleans: BOOLEAN · json columns: TEXT (JSON.stringify) · counts/tokens: INTEGER.
+ *
+ * Times and money are BIGINT because epoch-ms (~1.78e13) and aggregate micro-CNY both exceed
+ * INT4. Drizzle `bigint(..., { mode: "number" })` maps them to JS numbers (safe < 2^53).
  */
 
-export const users = sqliteTable(
+export const users = pgTable(
   "users",
   {
     id: text("id").primaryKey(),
@@ -16,65 +19,73 @@ export const users = sqliteTable(
     salt: text("salt").notNull().default(""),
     planId: text("plan_id").notNull().default("free"),
     role: text("role").notNull().default("user"), // user | admin
+    // account lifecycle: "active" accounts log in normally; "suspended" accounts are blocked
+    // at login and on every authenticated request (session resolves to null) until reactivated.
+    status: text("status").notNull().default("active"), // active | suspended
     // marks the shared demo/demo123 showcase account (read-only profile, no-delete)
-    isDemo: integer("is_demo", { mode: "boolean" }).notNull().default(false),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    isDemo: boolean("is_demo").notNull().default(false),
+    // OAuth identity (null for password-only accounts). Set when the user signs in with Google.
+    oauthProvider: text("oauth_provider"), // 'google' | null
+    googleSub: text("google_sub"), // Google's stable subject id; null unless linked
+    avatarUrl: text("avatar_url"), // provider profile picture URL; null otherwise
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   },
-  (t) => [uniqueIndex("ux_users_email").on(t.email)],
+  // google_sub is unique among non-null values (Postgres treats NULLs as distinct).
+  (t) => [uniqueIndex("ux_users_email").on(t.email), uniqueIndex("ux_users_google_sub").on(t.googleSub)],
 );
 
-export const sessions = sqliteTable(
+export const sessions = pgTable(
   "sessions",
   {
     id: text("id").primaryKey(),
     userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-    expiresAt: integer("expires_at").notNull(),
-    createdAt: integer("created_at").notNull(),
+    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
     userAgent: text("user_agent"),
   },
   (t) => [index("ix_sessions_user").on(t.userId), index("ix_sessions_expires").on(t.expiresAt)],
 );
 
-export const preferences = sqliteTable("preferences", {
+export const preferences = pgTable("preferences", {
   userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   theme: text("theme").notNull().default("dark"),
   lang: text("lang").notNull().default("zh"),
   mode: text("mode").notNull().default("expert"),
-  auto: integer("auto", { mode: "boolean" }).notNull().default(true),
+  auto: boolean("auto").notNull().default(true),
   mainModel: text("main_model").notNull().default("gpt-55"),
   trioJson: text("trio_json").notNull().default('["deepseek-pro","gpt-55","claude-opus"]'),
-  deepResearch: integer("deep_research", { mode: "boolean" }).notNull().default(false),
-  deepAgents: integer("deep_agents", { mode: "boolean" }).notNull().default(false),
-  platformFeeDisplayMicro: integer("platform_fee_display_micro").notNull().default(50000),
-  updatedAt: integer("updated_at").notNull(),
+  deepResearch: boolean("deep_research").notNull().default(false),
+  deepAgents: boolean("deep_agents").notNull().default(false),
+  platformFeeDisplayMicro: bigint("platform_fee_display_micro", { mode: "number" }).notNull().default(50000),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
 });
 
-export const modelState = sqliteTable(
+export const modelState = pgTable(
   "model_state",
   {
     userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     modelId: text("model_id").notNull(),
-    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
-    updatedAt: integer("updated_at").notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   },
   (t) => [primaryKey({ columns: [t.userId, t.modelId] })],
 );
 
-export const conversations = sqliteTable(
+export const conversations = pgTable(
   "conversations",
   {
     id: text("id").primaryKey(),
     userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
     color: text("color").notNull(),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   },
   (t) => [index("ix_conv_user_updated").on(t.userId, t.updatedAt)],
 );
 
-export const turns = sqliteTable(
+export const turns = pgTable(
   "turns",
   {
     id: text("id").primaryKey(),
@@ -86,16 +97,16 @@ export const turns = sqliteTable(
     // settings captured AT SEND TIME so regenerate replays the original turn (US3.UC4)
     mainModel: text("main_model"),
     trioJson: text("trio_json"),
-    auto: integer("auto", { mode: "boolean" }),
-    deepResearch: integer("deep_research", { mode: "boolean" }).notNull().default(false),
-    deepAgents: integer("deep_agents", { mode: "boolean" }).notNull().default(false),
+    auto: boolean("auto"),
+    deepResearch: boolean("deep_research").notNull().default(false),
+    deepAgents: boolean("deep_agents").notNull().default(false),
     status: text("status").notNull().default("streaming"), // streaming|done|failed|partial
-    createdAt: integer("created_at").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
   },
   (t) => [index("ix_turns_conv").on(t.conversationId, t.createdAt), index("ix_turns_user").on(t.userId, t.createdAt)],
 );
 
-export const messages = sqliteTable(
+export const messages = pgTable(
   "messages",
   {
     id: text("id").primaryKey(),
@@ -105,12 +116,12 @@ export const messages = sqliteTable(
     mode: text("mode"),
     payloadJson: text("payload_json").notNull(),
     seq: integer("seq").notNull(), // 0=user, 1=assistant
-    createdAt: integer("created_at").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
   },
   (t) => [index("ix_msg_conv").on(t.conversationId, t.createdAt, t.seq), index("ix_msg_turn").on(t.turnId)],
 );
 
-export const usageRecords = sqliteTable(
+export const usageRecords = pgTable(
   "usage_records",
   {
     id: text("id").primaryKey(),
@@ -124,12 +135,12 @@ export const usageRecords = sqliteTable(
     inputTokens: integer("input_tokens").notNull(),
     outputTokens: integer("output_tokens").notNull(),
     reasoningTokens: integer("reasoning_tokens").notNull().default(0),
-    costMicro: integer("cost_micro").notNull(),
-    platformFeeMicro: integer("platform_fee_micro").notNull(),
+    costMicro: bigint("cost_micro", { mode: "number" }).notNull(),
+    platformFeeMicro: bigint("platform_fee_micro", { mode: "number" }).notNull(),
     latencyMs: integer("latency_ms").notNull(),
     status: text("status").notNull().default("ok"), // ok|error|partial
     metaJson: text("meta_json"),
-    createdAt: integer("created_at").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
   },
   (t) => [
     index("ix_usage_user_time").on(t.userId, t.createdAt),
@@ -139,7 +150,7 @@ export const usageRecords = sqliteTable(
   ],
 );
 
-export const activityLogs = sqliteTable(
+export const activityLogs = pgTable(
   "activity_logs",
   {
     id: text("id").primaryKey(),
@@ -151,7 +162,7 @@ export const activityLogs = sqliteTable(
     status: integer("status").notNull(),
     latencyMs: integer("latency_ms").notNull(),
     metaJson: text("meta_json"),
-    createdAt: integer("created_at").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
   },
   (t) => [
     index("ix_act_user_time").on(t.userId, t.createdAt),
@@ -161,47 +172,47 @@ export const activityLogs = sqliteTable(
   ],
 );
 
-export const subscriptions = sqliteTable("subscriptions", {
+export const subscriptions = pgTable("subscriptions", {
   userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   planId: text("plan_id").notNull().default("free"),
-  includedCreditMicro: integer("included_credit_micro").notNull().default(150000000),
-  creditBalanceMicro: integer("credit_balance_micro").notNull().default(0),
+  includedCreditMicro: bigint("included_credit_micro", { mode: "number" }).notNull().default(150000000),
+  creditBalanceMicro: bigint("credit_balance_micro", { mode: "number" }).notNull().default(0),
   status: text("status").notNull().default("active"),
-  periodStart: integer("period_start").notNull(),
-  periodEnd: integer("period_end").notNull(),
-  updatedAt: integer("updated_at").notNull(),
+  periodStart: bigint("period_start", { mode: "number" }).notNull(),
+  periodEnd: bigint("period_end", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
 });
 
-export const invoices = sqliteTable(
+export const invoices = pgTable(
   "invoices",
   {
     id: text("id").primaryKey(),
     userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-    date: integer("date").notNull(),
+    date: bigint("date", { mode: "number" }).notNull(),
     planLabel: text("plan_label").notNull(),
     kind: text("kind").notNull().default("subscription"), // subscription|topup|overage
-    amountMicro: integer("amount_micro").notNull(),
+    amountMicro: bigint("amount_micro", { mode: "number" }).notNull(),
     status: text("status").notNull().default("paid"),
     lineItemsJson: text("line_items_json"),
-    createdAt: integer("created_at").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
   },
   (t) => [index("ix_inv_user_date").on(t.userId, t.date)],
 );
 
-export const paymentMethods = sqliteTable("payment_methods", {
+export const paymentMethods = pgTable("payment_methods", {
   userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   brand: text("brand").notNull(),
   last4: text("last4").notNull(),
   expMonth: integer("exp_month").notNull(),
   expYear: integer("exp_year").notNull(),
-  updatedAt: integer("updated_at").notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
 });
 
 /** Compact, distilled long-term memory about a user (bounded list of short facts). */
-export const userMemory = sqliteTable("user_memory", {
+export const userMemory = pgTable("user_memory", {
   userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   factsJson: text("facts_json").notNull().default("[]"),
-  updatedAt: integer("updated_at").notNull().default(0),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull().default(0),
 });
 
 export type User = typeof users.$inferSelect;

@@ -72,6 +72,10 @@ export const auth = {
   session: () => request<{ user: SessionUser; plan: string; preferences: PreferencesDTO }>("GET", "/api/auth/session"),
   sso: (provider: "google" | "github" | "wechat" | "apple") =>
     request<{ user: SessionUser; plan: string; sso: { provider: string; stub: boolean } }>("POST", "/api/auth/sso", { provider }),
+  /** Which third-party sign-in providers are configured (e.g. { google: true, ... }). */
+  providers: () => request<{ providers: Record<string, boolean> }>("GET", "/api/auth/providers"),
+  /** Full-page redirect target that begins the Google OAuth flow (not a fetch). */
+  googleStartUrl: "/api/auth/google",
 };
 
 // ---------- chat (streaming) ----------
@@ -218,8 +222,12 @@ export const profile = {
 export const admin = {
   metrics: (window: "1h" | "24h" | "7d" | "30d" = "24h") => request<any>("GET", "/api/admin/metrics" + qs({ window })),
   users: () => request<any>("GET", "/api/admin/users"),
-  updateUser: (id: string, b: { name?: string; role?: "user" | "admin"; planId?: "free" | "pro" | "team" | "ent" }) =>
-    request<any>("PATCH", `/api/admin/users/${id}`, b),
+  createUser: (b: { name: string; email: string; password: string; role?: "user" | "admin"; planId?: "free" | "pro" | "team" | "ent" }) =>
+    request<any>("POST", "/api/admin/users", b),
+  updateUser: (
+    id: string,
+    b: { name?: string; role?: "user" | "admin"; planId?: "free" | "pro" | "team" | "ent"; status?: "active" | "suspended"; newPassword?: string },
+  ) => request<any>("PATCH", `/api/admin/users/${id}`, b),
   deleteUser: (id: string) => request<any>("DELETE", `/api/admin/users/${id}`),
 };
 

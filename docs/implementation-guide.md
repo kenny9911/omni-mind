@@ -5,7 +5,7 @@ How the OmniMind backend is built and run. The **source of truth is the code**
 request flows end to end, how the LLM layer switches between a keyless deterministic mock
 and the real Vercel AI Gateway, and how to run it locally.
 
-Stack: **Next.js 16 Route Handlers** · **libSQL / Drizzle ORM** · **Vercel AI SDK**
+Stack: **Next.js 16 Route Handlers** · **PostgreSQL / Drizzle ORM** · **Vercel AI SDK**
 (`ai` v6) with a deterministic mock · **Zod** contracts · **Vitest** tests.
 
 Conventions, everywhere:
@@ -14,7 +14,7 @@ Conventions, everywhere:
 - **`x-request-id`** — a UUID is set on **every** response (success, 4xx, 5xx, and SSE).
 - **Money** — integer **micro-CNY** (`1 ¥ = 1_000_000 micro`); `¥ = micro / 1e6`. No floats in storage or math.
 - **Time** — epoch-ms integers (UTC).
-- **IDs** — UUID strings. **Booleans** — SQLite `INTEGER 0|1`. **JSON columns** — `TEXT` (`JSON.stringify`).
+- **IDs** — UUID strings (`TEXT`). **Booleans** — `BOOLEAN`. **JSON columns** — `TEXT` (`JSON.stringify`).
 
 ---
 
@@ -28,8 +28,8 @@ and compose these.
 | File | Role |
 |---|---|
 | `schema.ts` | Drizzle table definitions (the authoritative data model). Exports row types (`User`, `Conversation`, `Turn`, `UsageRecord`, …). |
-| `ddl.ts` | The idempotent `CREATE TABLE IF NOT EXISTS` + index DDL string applied at startup. |
-| `client.ts` | libSQL client + Drizzle binding. `getDb()` is a process-global, lazily-initialised, auto-migrating accessor used by every handler; `createDb(url)` builds an isolated bundle (used by tests); `ensureSchema()` runs the DDL; `__resetDbForTests()` drops the memoised instance. |
+| `ddl.ts` | The idempotent PostgreSQL `CREATE TABLE IF NOT EXISTS` (+ `ADD COLUMN IF NOT EXISTS`) + index DDL string applied at startup. |
+| `client.ts` | `pg` (node-postgres) client + Drizzle binding (`drizzle-orm/node-postgres`). `getDb()` is a process-global, lazily-initialised, auto-migrating accessor used by every handler; `createDb(url)` builds an isolated bundle (used by tests); `ensureSchema()` runs the DDL; `__resetDbForTests()` drops the memoised instance. |
 | `migrate.ts` | Standalone runner behind `npm run db:migrate` — opens a client and applies `ensureSchema`. |
 | `seed.ts` | `seedNewUser()` provisions a fresh account on signup (preferences, 12 enabled `model_state` rows, a Pro subscription with ¥150 credit, demo invoices + payment method, and coherent demo usage history so Usage/Billing/Recents render immediately). |
 
@@ -184,7 +184,7 @@ identical across modes.
 
 ## 4. Data model summary
 
-libSQL / SQLite, all times epoch-ms, all money integer micro-CNY. Defined in
+PostgreSQL, all times epoch-ms (`BIGINT`), all money integer micro-CNY (`BIGINT`). Defined in
 `lib/server/db/schema.ts`.
 
 | Table | Purpose | Notable columns |
@@ -215,8 +215,7 @@ mode.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DATABASE_URL` | `file:./.data/omnimind.db` | libSQL/SQLite location. Set a Turso/remote URL in prod. |
-| `DATABASE_AUTH_TOKEN` | _(unset)_ | Auth token for a remote libSQL (Turso) DB. |
+| `DATABASE_URL` | _(required)_ | PostgreSQL connection string (`postgres://…`; any compatible provider — Neon, Supabase, RDS, self-hosted). No local/file fallback. Pooler params (`pgbouncer`/`connection_limit`/`pool_timeout`) are parsed and safely ignored. |
 | `LLM_MODE` | `mock` | `mock` (deterministic, keyless) or `gateway` (real models). |
 | `AI_GATEWAY_API_KEY` | _(unset)_ | Required **only** when `LLM_MODE=gateway`. |
 | `PLATFORM_FEE_CNY` | `0.05` | Platform fee per model call, in CNY. Single-sourced into `PLATFORM_FEE_MICRO()` and reported everywhere. |

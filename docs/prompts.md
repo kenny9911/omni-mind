@@ -204,3 +204,37 @@ Implemented all three items flagged at the end of Prompt 10.
 **Outcome:** `tsc` clean · **239 tests pass**. Verified live (port 3439, demo account):
 `/api/billing/subscription` and all four `/api/usage/*` endpoints return real all-time data and the
 view models consume the exact shapes.
+
+## Prompt 12 — Implement Google login (2026-06-26)
+
+> now implement Google login
+
+Real "Sign in with Google" via OAuth 2.0 **Authorization Code flow + PKCE**, replacing the SSO
+placeholder for Google (the other providers still 503).
+- **New routes**: `GET /api/auth/google` (start — mints state + PKCE, sets a signed HttpOnly
+  `omni_oauth` cookie, 302s to Google), `GET /api/auth/google/callback` (validate state, exchange
+  code, decode/verify the id_token, require `email_verified`, find-or-create by verified email, mint
+  a 30-day session), and `GET /api/auth/providers` (gates the button).
+- **OAuth helper** `lib/server/auth/google.ts`: HMAC-signed (`APP_SECRET`) state cookie carrying
+  `{state, verifier, iat}`, S256 PKCE, `aud`/`iss`/`exp` id_token checks, redirect-URI resolution.
+- **Schema**: additive `users.oauth_provider` / `google_sub` (unique) / `avatar_url` columns; the
+  `google_sub` index is created in `ADDITIVE_MIGRATIONS` (after the column) so old DBs migrate cleanly.
+- **Frontend**: the Google button now does a full-page redirect to `/api/auth/google` (enabled only
+  when `/api/auth/providers` reports it configured); `/login?sso_error=<code>` surfaces failures.
+- **Security**: signed+short-lived CSRF/state cookie, PKCE, OIDC nonce binding, verified-email-only,
+  no open redirect, no secret/token logging.
+
+**Adversarial review** (6 lenses → per-finding skeptic verification, 21 agents) confirmed 10 real
+findings; the false positives (no open redirect, PKCE correct, suspended-bypass) were dropped. Fixed:
+- **HIGH** — refuse to auto-merge a Google identity into a pre-existing *password* account (Workspace
+  email-reuse takeover); only new emails are auto-created, only credential-less rows auto-linked.
+- **MEDIUM** — require `id_token.sub === users.google_sub` on linked-account sign-in (recycled-address
+  guard) → `account_conflict`.
+- **LOW** — mandatory numeric `exp` (+60 s skew); OIDC `nonce` binding; `__Host-` cookie prefix in
+  prod; truncate the attacker-controlled `?error` meta; catch the unique-index insert race (no 500);
+  block suspended accounts at the callback.
+
+**Outcome:** `tsc` clean · **255 tests pass** (13 in `tests/google-oauth.test.ts`). Verified live
+(port 3439): routes wired, `/api/auth/providers` returns `google:false` until configured, start +
+callback 302 to `/login?sso_error=not_configured`, and the additive columns are present on the live
+DB. See [google-login.md](google-login.md). Setup requires `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`.

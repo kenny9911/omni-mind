@@ -133,12 +133,12 @@ real slugs and symbol names (or vice-versa if the v4/4.8 ids are the intended ta
 line 265; `ix_turns_user ... DESC` 281; `ix_usage_user_time ... DESC` 317; `ix_act_user_time ... DESC`
 335; `ix_inv_user_date ... DESC` 364). The applied DDL creates them all **ascending**
 (`lib/server/db/ddl.ts:59,74,108,125,152`) and `schema.ts` likewise omits `.desc()`
-(`schema.ts:72,89,129,151,182`). SQLite can still scan an ASC index backwards, so this is a perf
+(`schema.ts:72,89,129,151,182`). PostgreSQL can still scan an ASC index backwards, so this is a perf
 nuance, not a correctness bug — but it is a literal doc↔DDL mismatch. **Recommendation:** add `.desc()`
 to match the doc, or drop `DESC` from the §1.2 snippets.
 
 ### P2-5 · DOC↔CODE: two schema sources of truth (`ddl.ts` raw SQL vs `schema.ts` Drizzle)
-§1.2 (line 199) says the DDL is "authored via Drizzle `sqliteTable`" and §0/§1.2 reference
+§1.2 (line 199) says the DDL is "authored via Drizzle `pgTable`" and §0/§1.2 reference
 `lib/server/db/migrate.ts` as the self-applier. In reality the schema is applied from a **hand-written
 SQL string** `lib/server/db/ddl.ts` via `ensureSchema()` (`db/client.ts:41-43`), duplicating the
 Drizzle definitions in `schema.ts`. The two are currently in sync but must be hand-maintained

@@ -69,7 +69,7 @@ handler work until these interfaces exist and compile.
 4. **WS-D — logging.** `logger.ts` (stdout JSON) + `activity.ts` (`writeActivity`, `writeUsage`).
    Best-effort, never throws, never blocks response (US10.UC1 alt-flow).
 
-**Foundation exit criteria:** schema migrates on a temp DB; `withRoute` round-trips an envelope
+**Foundation exit criteria:** schema migrates on an in-process PostgreSQL (pglite) DB; `withRoute` round-trips an envelope
 with a logged row; `gateway.complete()` streams deterministic mock tokens with correct token/cost;
 registry-sync test passes. The seed script provisions one Pro demo user (A5).
 
@@ -103,7 +103,7 @@ screen to real `/api/auth/*`. SSE consumption in `ChatView` against the real `PO
 
 ### Phase 4 — Tests (WS-T; authored alongside, hardened here)
 Unit (cost engine, router, registry-sync, fusion), integration (Route-Handler invocation against
-temp libSQL, per the matrix test files), e2e (Playwright against `next dev`). All run with
+in-process PostgreSQL via `@electric-sql/pglite`, per the matrix test files), e2e (Playwright against `next dev`). All run with
 `LLM_MODE=mock`, zero keys (SM5). See §3 for the per-UC test file.
 
 ### Phase 5 — PO review (WS-PO)

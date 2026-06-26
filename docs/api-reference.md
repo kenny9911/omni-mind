@@ -3,7 +3,7 @@
 **Generated from the code** (`app/api/**`, `lib/server/**`). Where the implementation
 diverges from `docs/technical-design.md`, **the code is authoritative** and is documented here.
 
-- **Runtime:** Next.js 16 Route Handlers (Node runtime), Drizzle ORM over libSQL, Vercel AI SDK
+- **Runtime:** Next.js 16 Route Handlers (Node runtime), Drizzle ORM over PostgreSQL, Vercel AI SDK
   with a deterministic `LLM_MODE=mock` provider (keyless).
 - **Endpoints:** 30 handlers across 8 domains.
 

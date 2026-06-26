@@ -9,7 +9,7 @@ import { POST as login } from "@/app/api/auth/login/route";
 import { GET as session } from "@/app/api/auth/session/route";
 import { POST as chat } from "@/app/api/chat/route";
 import { GET as profileGet, PATCH as profilePatch } from "@/app/api/profile/route";
-import { GET as adminUsers } from "@/app/api/admin/users/route";
+import { GET as adminUsers, POST as adminUserCreate } from "@/app/api/admin/users/route";
 import { PATCH as adminUserPatch, DELETE as adminUserDelete } from "@/app/api/admin/users/[id]/route";
 
 async function loginAs(email: string, password: string) {
@@ -135,5 +135,110 @@ describe("System accounts, per-account LLM mode, profile & admin", () => {
     // the victim's login no longer works
     const gone = await loginAs("victim@x.io", "supersecret");
     expect(gone.status).toBe(401);
+  });
+
+  it("admin creates accounts; provisioned user logs in; duplicate + non-admin guarded", async () => {
+    const admin = await loginAs("admin@robohire.io", "Lightark@1");
+    const adminCookie = admin.cookie!;
+
+    const created = await invoke(
+      adminUserCreate,
+      req("POST", "/api/admin/users", {
+        cookie: adminCookie,
+        body: { name: "Provisioned", email: "prov@x.io", password: "supersecret", role: "user", planId: "pro" },
+      }),
+    );
+    expect(created.status).toBe(201);
+    expect(created.body.data.user.email).toBe("prov@x.io");
+    expect(created.body.data.user.plan).toBe("pro");
+    expect(created.body.data.user.status).toBe("active");
+
+    // the provisioned account works immediately (real password + seeded prefs)
+    const login1 = await loginAs("prov@x.io", "supersecret");
+    expect(login1.status).toBe(200);
+
+    // duplicate email → 409
+    const dup = await invoke(
+      adminUserCreate,
+      req("POST", "/api/admin/users", { cookie: adminCookie, body: { name: "Dup", email: "prov@x.io", password: "supersecret" } }),
+    );
+    expect(dup.status).toBe(409);
+    expect(dup.body.error.code).toBe("EMAIL_TAKEN");
+
+    // non-admin cannot create
+    const forbidden = await invoke(
+      adminUserCreate,
+      req("POST", "/api/admin/users", { cookie: login1.cookie!, body: { name: "X", email: "x2@x.io", password: "supersecret" } }),
+    );
+    expect(forbidden.status).toBe(403);
+
+    // short password is rejected by validation
+    const weak = await invoke(
+      adminUserCreate,
+      req("POST", "/api/admin/users", { cookie: adminCookie, body: { name: "Weak", email: "weak@x.io", password: "short" } }),
+    );
+    expect(weak.status).toBe(400);
+  });
+
+  it("admin resets a password: old fails, new works, existing sessions die", async () => {
+    const admin = await loginAs("admin@robohire.io", "Lightark@1");
+    const adminCookie = admin.cookie!;
+    const v = await invoke(signup, req("POST", "/api/auth/signup", { body: { name: "Reset", email: "reset@x.io", password: "originalpw1" } }));
+    const id = v.body.data.user.id;
+    const userCookie = v.cookie!;
+
+    expect((await invoke(session, req("GET", "/api/auth/session", { cookie: userCookie }))).status).toBe(200);
+
+    const reset = await invoke(
+      adminUserPatch,
+      req("PATCH", `/api/admin/users/${id}`, { cookie: adminCookie, body: { newPassword: "brandnewpw9" } }),
+      { id },
+    );
+    expect(reset.status).toBe(200);
+
+    // the reset boots the target's existing sessions
+    expect((await invoke(session, req("GET", "/api/auth/session", { cookie: userCookie }))).status).toBe(401);
+    // old password fails, new one works
+    expect((await loginAs("reset@x.io", "originalpw1")).status).toBe(401);
+    expect((await loginAs("reset@x.io", "brandnewpw9")).status).toBe(200);
+  });
+
+  it("admin suspends/reactivates an account; self-suspend + system guarded", async () => {
+    const admin = await loginAs("admin@robohire.io", "Lightark@1");
+    const adminCookie = admin.cookie!;
+    const adminId = (await invoke(session, req("GET", "/api/auth/session", { cookie: adminCookie }))).body.data.user.id;
+
+    const v = await invoke(signup, req("POST", "/api/auth/signup", { body: { name: "Susp", email: "susp@x.io", password: "supersecret" } }));
+    const id = v.body.data.user.id;
+    const userCookie = v.cookie!;
+
+    const susp = await invoke(adminUserPatch, req("PATCH", `/api/admin/users/${id}`, { cookie: adminCookie, body: { status: "suspended" } }), { id });
+    expect(susp.status).toBe(200);
+    expect(susp.body.data.user.status).toBe("suspended");
+
+    // the suspended user's live session is invalidated, and a fresh login is blocked with a clear reason
+    expect((await invoke(session, req("GET", "/api/auth/session", { cookie: userCookie }))).status).toBe(401);
+    const blocked = await loginAs("susp@x.io", "supersecret");
+    expect(blocked.status).toBe(403);
+    expect(blocked.body.error.code).toBe("ACCOUNT_SUSPENDED");
+
+    // reactivate → login works again
+    const react = await invoke(adminUserPatch, req("PATCH", `/api/admin/users/${id}`, { cookie: adminCookie, body: { status: "active" } }), { id });
+    expect(react.status).toBe(200);
+    expect((await loginAs("susp@x.io", "supersecret")).status).toBe(200);
+
+    // a (non-system) admin cannot suspend themselves
+    const boss = await invoke(signup, req("POST", "/api/auth/signup", { body: { name: "Boss", email: "boss@x.io", password: "supersecret" } }));
+    const bossId = boss.body.data.user.id;
+    await invoke(adminUserPatch, req("PATCH", `/api/admin/users/${bossId}`, { cookie: adminCookie, body: { role: "admin" } }), { id: bossId });
+    const bossLogin = await loginAs("boss@x.io", "supersecret");
+    const selfSusp = await invoke(adminUserPatch, req("PATCH", `/api/admin/users/${bossId}`, { cookie: bossLogin.cookie!, body: { status: "suspended" } }), { id: bossId });
+    expect(selfSusp.status).toBe(400);
+    expect(selfSusp.body.error.code).toBe("CANNOT_SUSPEND_SELF");
+
+    // the fixed admin system account cannot be suspended at all
+    const sysSusp = await invoke(adminUserPatch, req("PATCH", `/api/admin/users/${adminId}`, { cookie: adminCookie, body: { status: "suspended" } }), { id: adminId });
+    expect(sysSusp.status).toBe(400);
+    expect(sysSusp.body.error.code).toBe("CANNOT_MODIFY_SYSTEM");
   });
 });

@@ -1008,6 +1008,37 @@ export class OmniStore {
   adminDeleteUser = (id: string): Promise<void> =>
     this.adminMutate(() => api.admin.deleteUser(id));
 
+  adminResetPassword = (id: string, newPassword: string): Promise<void> =>
+    this.adminMutate(() => api.admin.updateUser(id, { newPassword }));
+
+  adminSetStatus = (id: string, status: "active" | "suspended"): Promise<void> =>
+    this.adminMutate(() => api.admin.updateUser(id, { status }));
+
+  /** Provision a new account; returns true on success so the form can reset/close. */
+  async adminCreateUser(form: {
+    name: string;
+    email: string;
+    password: string;
+    role: "user" | "admin";
+    planId: "free" | "pro" | "team" | "ent";
+  }): Promise<boolean> {
+    if (!this.live || this.state.userRole !== "admin") return false;
+    try {
+      await api.admin.createUser(form);
+      this.set({ usersError: null });
+      await this.loadUsers();
+      return true;
+    } catch (e) {
+      if (e instanceof ApiClientError && e.status === 401) {
+        this.redirectLogin();
+        return false;
+      }
+      const code = e instanceof ApiClientError ? e.code : "";
+      this.set({ usersError: code || (e instanceof Error ? e.message : "Create failed") });
+      return false;
+    }
+  }
+
   dispose() {
     if (this.copyTimer) clearTimeout(this.copyTimer);
     if (this.liveAbort) this.liveAbort.abort();

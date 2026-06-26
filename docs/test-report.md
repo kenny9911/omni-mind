@@ -1,8 +1,8 @@
 # OmniMind Backend — Test Report
 
 QA report for the completed OmniMind backend. The suite runs against the deterministic
-keyless mock (`LLM_MODE=mock`, `MOCK_STREAM_DELAY_MS=0`) over an isolated temp libSQL DB per
-file, invoking the **real** Route Handlers through `tests/helpers/harness.ts`.
+keyless mock (`LLM_MODE=mock`, `MOCK_STREAM_DELAY_MS=0`) over an isolated in-process PostgreSQL
+(`@electric-sql/pglite`) per file, invoking the **real** Route Handlers through `tests/helpers/harness.ts`.
 
 ## Summary
 

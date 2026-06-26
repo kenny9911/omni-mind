@@ -11,11 +11,11 @@ follow it so the codebase stays coherent.
 |----------------|--------|
 | Runtime/API    | **Next.js 16 App Router Route Handlers** (`app/api/**`), Node.js runtime (Fluid-Compute compatible). Same repo as the frontend. |
 | Language       | **TypeScript** (strict), **zod** for all request/response validation & shared contracts. |
-| Database       | **Drizzle ORM** over **libSQL** (`@libsql/client`). Local/test: `file:./.data/omnimind.db`. Prod-portable to Turso / Neon Postgres (driver swap). |
+| Database       | **Drizzle ORM** over **PostgreSQL** (`pg` / node-postgres via `drizzle-orm/node-postgres`). Any compatible Postgres: Neon, Supabase, RDS, or self-hosted. `DATABASE_URL` (a `postgres://` connection string) is required. |
 | Auth           | Session-based: password hashing with **node:crypto scrypt**, opaque **DB-backed sessions** in an httpOnly, SameSite=Lax cookie. |
 | LLM            | **Vercel AI SDK v6** (`ai`) via **AI Gateway** (`"provider/model"`), wrapped by `lib/server/llm/`. Deterministic **mock** mode for keyless runs. See [llm-sdk-evaluation.md](llm-sdk-evaluation.md). |
 | Logging        | Custom structured logger → stdout (JSON) **and** DB tables `activity_logs`, `usage_records`. Captures user activity, tokens, cost, latency on every call & request. |
-| Testing        | **Vitest** (unit + integration via direct Route-Handler invocation against an in-memory/temp libSQL DB) + **Playwright** (e2e against `next dev`). |
+| Testing        | **Vitest** (unit + integration via direct Route-Handler invocation against an in-process PostgreSQL via `@electric-sql/pglite`) + **Playwright** (e2e against `next dev`). |
 | IDs / time     | `crypto.randomUUID()` for ids; store timestamps as epoch-ms integers (UTC). |
 | Money          | Currency **CNY (¥)**. Store costs as **micro-cents (integer)** to avoid float drift; format at the edge. |
 
@@ -63,8 +63,7 @@ The table below is the authoritative list of env vars **actually read by code**.
 
 | Var | Default (if unset) | Read at | Purpose |
 |-----|--------------------|---------|---------|
-| `DATABASE_URL` | `file:./.data/omnimind.db` | `lib/server/db/client.ts` | libSQL connection URL (local file or remote Turso/Neon). |
-| `DATABASE_AUTH_TOKEN` | _(unset → none)_ | `lib/server/db/client.ts` | Auth token for a remote libSQL/Turso database. Omit for local file DBs. |
+| `DATABASE_URL` | _(none — **required**)_ | `lib/server/db/client.ts` | PostgreSQL connection string (`postgres://…`). Required; there is no local/file fallback. Pooler params (`pgbouncer`/`connection_limit`/`pool_timeout`) are parsed and ignored safely. |
 | `LLM_MODE` | `mock` | `lib/server/llm/gateway.ts`, `app/api/models/route.ts`, `app/api/auth/sso/route.ts` | `mock` = deterministic keyless provider; `gateway` = real models via the Vercel AI Gateway. |
 | `AI_GATEWAY_API_KEY` | _(unset)_ | `app/api/models/route.ts` (gateway readiness) | Vercel AI Gateway key; only consulted when `LLM_MODE=gateway`. |
 | `PLATFORM_FEE_CNY` | `0.05` | `lib/server/llm/cost.ts` | Per-call platform fee in ¥; converted to `PLATFORM_FEE_MICRO = round(× 1e6)` (default `50000`). |

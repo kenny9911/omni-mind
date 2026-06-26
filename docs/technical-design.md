@@ -9,7 +9,7 @@
 > contract for all 50 use cases (US1.UC1 … US10.UC5), the LLM Gateway (registry, intent
 > router, fusion/compiler, mock provider, cost engine), the auth design, the error
 > envelope, and the streaming/SSE event format. It honors the **frozen** stack exactly:
-> Next.js 16 Route Handlers (Node runtime) · Drizzle ORM over libSQL · Vercel AI SDK v6
+> Next.js 16 Route Handlers (Node runtime) · Drizzle ORM over PostgreSQL · Vercel AI SDK v6
 > via AI Gateway with deterministic `LLM_MODE=mock` · session auth with `node:crypto`
 > scrypt. All times are **epoch-ms integers (UTC)**; all money is **integer micro-cents
 > CNY**; all ids are `crypto.randomUUID()` unless noted.
@@ -20,8 +20,8 @@
 
 | Concept | Rule |
 |---|---|
-| **Money** | `micro-cents CNY` = ¥ × 1,000,000. `¥0.05` fee = `50000`. Stored as SQLite `INTEGER`. Never persist floats. Format at the edge with `fmtMoney`. |
-| **Tokens** | Stored as `INTEGER`. Mock mode derives counts from `estTok(s) = round(len/1.8)`; gateway mode uses the SDK's normalized `usage`. |
+| **Money** | `micro-cents CNY` = ¥ × 1,000,000. `¥0.05` fee = `50000`. Stored as PostgreSQL `BIGINT`. Never persist floats. Format at the edge with `fmtMoney`. |
+| **Tokens** | Stored as `BIGINT`. Mock mode derives counts from `estTok(s) = round(len/1.8)`; gateway mode uses the SDK's normalized `usage`. |
 | **Cost engine** | `costMicro = round(inputTokens × pin) + round((outputTokens + reasoningTokens) × pout)` (since `pin`/`pout` are ¥ per 1M, micro-cents-per-token = price). **Reasoning tokens are billed at the output price** — they are generated output. Plus `platformFeeMicro = PLATFORM_FEE_MICRO` (default `50000`) **per model call**. Unknown model → fallback price `{in:5,out:15}` + `pricingFallback:true`. Mirrors `cost.ts` (`modelCostMicro`) exactly. |
 | **Time** | `Date.now()` epoch-ms. Day buckets computed at server-local `00:00`, mirroring `aggregate()`'s `setHours(0,0,0,0)`. |
 | **IDs** | `crypto.randomUUID()` (text). `messages.id` / `turnId` are uuids; the client's numeric message id is a presentation concern only. |
@@ -39,7 +39,7 @@
 | `LLM_MODE` | `mock` | `mock` (keyless, deterministic) or `gateway` (Vercel AI SDK v6 + AI Gateway). |
 | `AI_GATEWAY_API_KEY` | — | Required only when `LLM_MODE=gateway`. |
 | `PLATFORM_FEE_CNY` | `0.05` | Per-call platform fee in ¥; converted to `PLATFORM_FEE_MICRO = round(× 1e6)`. |
-| `DATABASE_URL` | `file:./.data/omnimind.db` | libSQL connection string. |
+| `DATABASE_URL` | — (required) | PostgreSQL connection string (`postgres://…`); no file/local fallback. Pooler params (pgbouncer/connection_limit/pool_timeout) parsed and ignored safely. |
 | `SESSION_TTL_MS` | `2592000000` (30d) | Default session lifetime; `7d` when `remember=false`. |
 | `MOCK_STREAM_CPS` | `360` | Mock streaming pace (chars/sec) — mirrors store `RATE`. |
 | `SEED_PLAN` | `pro` | Plan seeded for new users; Pro included credit `¥150`. |
@@ -90,18 +90,18 @@ erDiagram
         text theme
         text lang
         text mode
-        int auto
+        boolean auto
         text main_model
         text trio_json
-        int deep_research
-        int deep_agents
+        boolean deep_research
+        boolean deep_agents
         int platform_fee_display_micro
         int updated_at
     }
     model_state {
         text user_id FK
         text model_id
-        int enabled
+        boolean enabled
         int updated_at
     }
     conversations {
@@ -119,8 +119,8 @@ erDiagram
         text mode
         text prompt_text
         text route_text
-        int deep_research
-        int deep_agents
+        boolean deep_research
+        boolean deep_agents
         text status
         int created_at
     }
@@ -196,11 +196,12 @@ erDiagram
     }
 ```
 
-### 1.2 DDL (libSQL / SQLite dialect, authored via Drizzle `sqliteTable`)
+### 1.2 DDL (PostgreSQL dialect, authored via Drizzle `pgTable` in `lib/server/db/schema.ts`)
 
-> All booleans are stored as `INTEGER` (`0|1`). JSON columns are `TEXT` holding
-> `JSON.stringify(...)`. Migrations are idempotent (`CREATE TABLE IF NOT EXISTS`,
-> `CREATE INDEX IF NOT EXISTS`) and self-apply on first run (`lib/server/db/migrate.ts`).
+> All booleans are stored as `BOOLEAN`. JSON columns are `TEXT` holding
+> `JSON.stringify(...)`. DDL (`lib/server/db/ddl.ts`) is idempotent (`CREATE TABLE IF NOT EXISTS`,
+> `CREATE INDEX IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`) and auto-applies on first connect
+> via `ensureSchema()` (or run `npm run db:migrate`).
 
 ```sql
 -- ── users ────────────────────────────────────────────────────────────────────
@@ -212,8 +213,8 @@ CREATE TABLE IF NOT EXISTS users (
   salt          TEXT NOT NULL,                         -- 16-byte random hex
   plan_id       TEXT NOT NULL DEFAULT 'pro',           -- free|pro|team|ent (denormalized cache of subscriptions.plan_id)
   role          TEXT NOT NULL DEFAULT 'user',          -- user|admin (admin gates US10 admin endpoints)
-  created_at    INTEGER NOT NULL,
-  updated_at    INTEGER NOT NULL
+  created_at    BIGINT NOT NULL,
+  updated_at    BIGINT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_users_email ON users (email);
 
@@ -221,8 +222,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_users_email ON users (email);
 CREATE TABLE IF NOT EXISTS sessions (
   id         TEXT PRIMARY KEY,                         -- opaque 32-byte random hex (the cookie value)
   user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  expires_at INTEGER NOT NULL,
-  created_at INTEGER NOT NULL,
+  expires_at BIGINT NOT NULL,
+  created_at BIGINT NOT NULL,
   user_agent TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_sessions_user    ON sessions (user_id);
@@ -234,21 +235,21 @@ CREATE TABLE IF NOT EXISTS preferences (
   theme                      TEXT    NOT NULL DEFAULT 'dark',     -- dark|light
   lang                       TEXT    NOT NULL DEFAULT 'zh',       -- zh|zh-TW|en|ja
   mode                       TEXT    NOT NULL DEFAULT 'expert',   -- fast|expert (defaultMode)
-  auto                       INTEGER NOT NULL DEFAULT 1,          -- 0|1
+  auto                       BOOLEAN NOT NULL DEFAULT TRUE,
   main_model                 TEXT    NOT NULL DEFAULT 'gpt-55',
   trio_json                  TEXT    NOT NULL DEFAULT '["deepseek-pro","gpt-55","claude-opus"]',
-  deep_research              INTEGER NOT NULL DEFAULT 0,
-  deep_agents                INTEGER NOT NULL DEFAULT 0,
-  platform_fee_display_micro INTEGER NOT NULL DEFAULT 50000,      -- display/default only; NEVER changes billed fee
-  updated_at                 INTEGER NOT NULL
+  deep_research              BOOLEAN NOT NULL DEFAULT FALSE,
+  deep_agents                BOOLEAN NOT NULL DEFAULT FALSE,
+  platform_fee_display_micro BIGINT  NOT NULL DEFAULT 50000,      -- display/default only; NEVER changes billed fee
+  updated_at                 BIGINT  NOT NULL
 );
 
 -- ── model_state (per-user enable map; main lives in preferences) ──────────────
 CREATE TABLE IF NOT EXISTS model_state (
   user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   model_id   TEXT    NOT NULL,                         -- registry id (one of the 12) or openrouter id
-  enabled    INTEGER NOT NULL DEFAULT 1,
-  updated_at INTEGER NOT NULL,
+  enabled    BOOLEAN NOT NULL DEFAULT TRUE,
+  updated_at BIGINT  NOT NULL,
   PRIMARY KEY (user_id, model_id)
 );
 -- Absence of a row ⇒ enabled=true (seed inserts all 12 enabled on signup; FR-40).
@@ -259,8 +260,8 @@ CREATE TABLE IF NOT EXISTS conversations (
   user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title      TEXT NOT NULL,                            -- derived from first prompt if not given
   color      TEXT NOT NULL,                            -- deterministic accent (RecentVM), e.g. hashed from id
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL                          -- bumped on each turn/rename → drives recents ordering
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL                           -- bumped on each turn/rename → drives recents ordering
 );
 CREATE INDEX IF NOT EXISTS ix_conv_user_updated ON conversations (user_id, updated_at DESC);
 
@@ -272,10 +273,10 @@ CREATE TABLE IF NOT EXISTS turns (
   mode            TEXT NOT NULL,                        -- fast|expert
   prompt_text     TEXT NOT NULL,
   route_text      TEXT,                                 -- localized routeText (fast+auto only); null otherwise
-  deep_research   INTEGER NOT NULL DEFAULT 0,
-  deep_agents     INTEGER NOT NULL DEFAULT 0,
+  deep_research   BOOLEAN NOT NULL DEFAULT FALSE,
+  deep_agents     BOOLEAN NOT NULL DEFAULT FALSE,
   status          TEXT NOT NULL DEFAULT 'streaming',    -- streaming|done|failed|partial
-  created_at      INTEGER NOT NULL
+  created_at      BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_turns_conv ON turns (conversation_id, created_at);
 CREATE INDEX IF NOT EXISTS ix_turns_user ON turns (user_id, created_at DESC); -- ledger/usage newest-first
@@ -289,7 +290,7 @@ CREATE TABLE IF NOT EXISTS messages (
   mode            TEXT,                                 -- fast|expert (assistant only)
   payload_json    TEXT NOT NULL,                        -- see §1.3 message payload shapes
   seq             INTEGER NOT NULL,                     -- 0=user, 1=assistant within a turn
-  created_at      INTEGER NOT NULL
+  created_at      BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_msg_conv ON messages (conversation_id, created_at, seq);
 CREATE INDEX IF NOT EXISTS ix_msg_turn ON messages (turn_id);
@@ -304,15 +305,15 @@ CREATE TABLE IF NOT EXISTS usage_records (
   message_id         TEXT,
   model_id           TEXT NOT NULL,
   role               TEXT NOT NULL,                     -- single|expert|fusion
-  input_tokens       INTEGER NOT NULL,
-  output_tokens      INTEGER NOT NULL,
-  reasoning_tokens   INTEGER NOT NULL DEFAULT 0,
-  cost_micro         INTEGER NOT NULL,                  -- model cost only (NOT incl. fee)
-  platform_fee_micro INTEGER NOT NULL,                  -- = PLATFORM_FEE_MICRO per call
-  latency_ms         INTEGER NOT NULL,
+  input_tokens       BIGINT NOT NULL,
+  output_tokens      BIGINT NOT NULL,
+  reasoning_tokens   BIGINT NOT NULL DEFAULT 0,
+  cost_micro         BIGINT NOT NULL,                   -- model cost only (NOT incl. fee)
+  platform_fee_micro BIGINT NOT NULL,                   -- = PLATFORM_FEE_MICRO per call
+  latency_ms         BIGINT NOT NULL,
   status             TEXT NOT NULL DEFAULT 'ok',        -- ok|error|partial
   meta_json          TEXT,                              -- {usageEstimated?, pricingFallback?, gateway?, error?}
-  created_at         INTEGER NOT NULL
+  created_at         BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_usage_user_time  ON usage_records (user_id, created_at DESC); -- aggregates/trend
 CREATE INDEX IF NOT EXISTS ix_usage_turn       ON usage_records (turn_id);                  -- ledger join
@@ -328,9 +329,9 @@ CREATE TABLE IF NOT EXISTS activity_logs (
   route      TEXT NOT NULL,                             -- "/api/chat"
   method     TEXT NOT NULL,                             -- GET|POST|PATCH|DELETE|PUT
   status     INTEGER NOT NULL,                          -- HTTP status
-  latency_ms INTEGER NOT NULL,
+  latency_ms BIGINT NOT NULL,
   meta_json  TEXT,                                      -- action-specific {modelId?, mode?, filters?, code?}
-  created_at INTEGER NOT NULL
+  created_at BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_act_user_time ON activity_logs (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS ix_act_action    ON activity_logs (action, created_at DESC);
@@ -339,27 +340,27 @@ CREATE INDEX IF NOT EXISTS ix_act_request   ON activity_logs (request_id);
 
 -- ── subscriptions (1:1 user) ─────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS subscriptions (
-  user_id               TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  user_id               TEXT    PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   plan_id               TEXT    NOT NULL DEFAULT 'pro',  -- free|pro|team|ent
-  included_credit_micro INTEGER NOT NULL DEFAULT 150000000, -- ¥150 for Pro
-  credit_balance_micro  INTEGER NOT NULL DEFAULT 0,      -- top-up balance (separate from included credit)
+  included_credit_micro BIGINT  NOT NULL DEFAULT 150000000, -- ¥150 for Pro
+  credit_balance_micro  BIGINT  NOT NULL DEFAULT 0,      -- top-up balance (separate from included credit)
   status                TEXT    NOT NULL DEFAULT 'active', -- active|pending|canceled
-  period_start          INTEGER NOT NULL,
-  period_end            INTEGER NOT NULL,
-  updated_at            INTEGER NOT NULL
+  period_start          BIGINT  NOT NULL,
+  period_end            BIGINT  NOT NULL,
+  updated_at            BIGINT  NOT NULL
 );
 
 -- ── invoices ─────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS invoices (
   id              TEXT PRIMARY KEY,
   user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  date            INTEGER NOT NULL,                      -- invoice date epoch-ms
+  date            BIGINT NOT NULL,                       -- invoice date epoch-ms
   plan_label      TEXT NOT NULL,                         -- "Pro · Monthly"
   kind            TEXT NOT NULL DEFAULT 'subscription',  -- subscription|topup|overage
-  amount_micro    INTEGER NOT NULL,
+  amount_micro    BIGINT NOT NULL,
   status          TEXT NOT NULL DEFAULT 'paid',          -- paid|due|void
   line_items_json TEXT,                                  -- [{label, amountMicro}]
-  created_at      INTEGER NOT NULL
+  created_at      BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_inv_user_date ON invoices (user_id, date DESC);
 
@@ -370,7 +371,7 @@ CREATE TABLE IF NOT EXISTS payment_methods (
   last4      TEXT NOT NULL,
   exp_month  INTEGER NOT NULL,
   exp_year   INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at BIGINT NOT NULL
 );
 ```
 
@@ -414,7 +415,7 @@ type ExpertAssistantPayload = {
   messages` only.
 - **`model_state` sparse rows:** a missing `(user_id, model_id)` row means *enabled*. The
   signup seed inserts 12 enabled rows so the picker/registry merge is a left join with a
-  `COALESCE(enabled, 1)`.
+  `COALESCE(enabled, TRUE)`.
 - **`users.plan_id`** is a denormalized cache of `subscriptions.plan_id` to avoid a join on
   `me`; the subscriptions row is authoritative for credit math.
 
@@ -492,7 +493,7 @@ type ModelDTO = {
   id; name; vendor; color; initials; tier;       // from registry (authoritative)
   tags: string[];                                 // localized for caller lang via pick()
   ctx; pin; pout;                                 // pricing/context from registry
-  enabled: boolean;                               // per-user model_state (COALESCE 1)
+  enabled: boolean;                               // per-user model_state (COALESCE TRUE)
   isMain: boolean;                                // id === preferences.main_model
 };
 ```
@@ -615,7 +616,7 @@ const GATEWAY_ID: Record<string,string> = {
 };
 // OpenRouter entries → "openrouter/<vendor>/<model>"; pricing falls back to {in:5,out:15} if unlisted (FR-19).
 export function priceOf(id): {pin:number;pout:number} { return PRICE_MAP[id] ?? {pin:5,pout:15}; }
-export function isEnabledFor(userId, id): boolean   // COALESCE(model_state.enabled, 1)
+export function isEnabledFor(userId, id): boolean   // COALESCE(model_state.enabled, TRUE)
 ```
 
 ### 3.2 Intent router (`router.ts`) — algorithm
