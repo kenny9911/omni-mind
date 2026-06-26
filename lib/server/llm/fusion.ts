@@ -6,8 +6,10 @@ import type { Lang } from "@/lib/types";
 import type { DB } from "../db/client";
 import { messages, turns } from "../db/schema";
 import { writeUsage } from "../log/activity";
+import { log } from "../log/logger";
 import { billCall, PLATFORM_FEE_MICRO } from "./cost";
 import { route } from "./router";
+import { routeFromIntent, type IntentResult } from "./intent";
 import { streamOne } from "./gateway";
 import { webSearch, formatResearchForPrompt, researchConfigured, type ResearchSource } from "./research";
 
@@ -29,6 +31,14 @@ export interface RunTurnCfg {
   deepAgents: boolean;
   /** compact user-context memory preamble (injected into single + fusion calls only) */
   memory?: string;
+  /** prior conversation turns (alternating user/assistant), oldest→newest — multi-turn context
+   *  sent to every model call so follow-ups are understood in context. */
+  history?: { role: "user" | "assistant"; content: string }[];
+  /** resolved intent + standalone-query rewrite for this turn (drives fast-mode auto-routing). */
+  intent?: IntentResult;
+  /** set only when THIS turn created the conversation — lets the client add it to the
+   *  sidebar recents immediately (title/color match what the server persisted). */
+  newConversation?: { title: string; color: string };
   signal?: AbortSignal;
 }
 
@@ -50,12 +60,20 @@ export async function runTurn(db: DB, cfg: RunTurnCfg, emit: Emit): Promise<RunT
     conversationId: cfg.conversationId,
     mode: cfg.mode,
     ts: Date.now(),
+    // For a freshly-created conversation, hand the client the title+color so it can
+    // surface the chat in the sidebar recents right away (no reload needed).
+    ...(cfg.newConversation
+      ? { newConversation: true, title: cfg.newConversation.title, color: cfg.newConversation.color }
+      : {}),
   });
 
   const fee = PLATFORM_FEE_MICRO();
   // Injected context-memory adds real input tokens to the single + fusion calls;
   // count them so the cost ledger reflects what was actually sent (experts omit it).
   const memTok = cfg.memory ? estTok(cfg.memory) : 0;
+  // Conversation history is sent to EVERY model call (single, experts, fusion); count its
+  // tokens so the input billing reflects the real multi-turn payload.
+  const historyTok = (cfg.history ?? []).reduce((a, m) => a + estTok(m.content), 0);
   let turnStatus: "done" | "partial" | "failed" = "done";
   let payload: Record<string, unknown>;
   let routedModelId: string | undefined;
@@ -129,7 +147,11 @@ export async function runTurn(db: DB, cfg: RunTurnCfg, emit: Emit): Promise<RunT
     let modelId = cfg.mainModel;
     let routeText: string | null = null;
     if (cfg.auto) {
-      const r = route(cfg.prompt, cfg.lang, cfg.enabledSet);
+      // Prefer the intent-classifier routing (resolves follow-ups via standalone_query); the
+      // regex route() remains the safety net inside routeFromIntent and when no intent was computed.
+      const r = cfg.intent
+        ? routeFromIntent(cfg.intent, cfg.lang, cfg.enabledSet)
+        : route(cfg.prompt, cfg.lang, cfg.enabledSet);
       modelId = r.id;
       routeText = r.routeText;
       routedModelId = r.id;
@@ -137,7 +159,7 @@ export async function runTurn(db: DB, cfg: RunTurnCfg, emit: Emit): Promise<RunT
     }
     const callId = randomUUID();
     emit("call.start", { callId, modelId, role: "single" });
-    const inputTokens = inflate(estTok(cfg.prompt) + 180 + memTok, cfg.deepResearch, cfg.deepAgents);
+    const inputTokens = inflate(estTok(cfg.prompt) + 180 + memTok + historyTok, cfg.deepResearch, cfg.deepAgents);
     const t0 = performance.now();
     const call = await streamOne({
       role: "single",
@@ -145,6 +167,7 @@ export async function runTurn(db: DB, cfg: RunTurnCfg, emit: Emit): Promise<RunT
       prompt: cfg.prompt,
       lang: cfg.lang,
       memory: answerPreamble,
+      history: cfg.history,
       signal: cfg.signal,
       onDelta: (delta) => emit("call.delta", { callId, modelId, role: "single", delta }),
     });
@@ -193,13 +216,14 @@ export async function runTurn(db: DB, cfg: RunTurnCfg, emit: Emit): Promise<RunT
       cfg.trio.map(async (modelId, i) => {
         const callId = randomUUID();
         emit("call.start", { callId, modelId, role: "expert", index: i });
-        const inputTokens = inflate(estTok(cfg.prompt) + 180, cfg.deepResearch, cfg.deepAgents);
+        const inputTokens = inflate(estTok(cfg.prompt) + 180 + historyTok, cfg.deepResearch, cfg.deepAgents);
         const t0 = performance.now();
         const call = await streamOne({
           role: "expert",
           modelId,
           prompt: cfg.prompt,
           lang: cfg.lang,
+          history: cfg.history,
           signal: cfg.signal,
           onDelta: (delta) => emit("call.delta", { callId, modelId, role: "expert", index: i, delta }),
         });
@@ -249,6 +273,12 @@ export async function runTurn(db: DB, cfg: RunTurnCfg, emit: Emit): Promise<RunT
       payload = { experts: expertPayload };
     } else {
       // ---- fusion: reasoning trace, then consolidated answer ----
+      // The compiler receives the surviving experts' FULL answers so it can actually
+      // merge their content — keeping the strongest points from each, not re-answering blind.
+      const expertAnswers = surviving.map((e) => ({
+        name: MODEL_MAP[e.modelId]?.name ?? e.modelId,
+        text: e.text,
+      }));
       emit("reason.start", { modelId: compiler });
       const tF0 = performance.now();
       const reason = await streamOne({
@@ -257,12 +287,23 @@ export async function runTurn(db: DB, cfg: RunTurnCfg, emit: Emit): Promise<RunT
         prompt: cfg.prompt,
         lang: cfg.lang,
         trio: cfg.trio,
+        expertAnswers,
         memory: answerPreamble,
+        history: cfg.history,
         signal: cfg.signal,
         onDelta: (delta) => emit("reason.delta", { delta }),
       });
-      const reasoningTokens = estTok(reason.text);
-      emit("reason.done", { reasoningTokens });
+      // The reasoning trace is best-effort. If the compiler fails to produce it (e.g. a transient
+      // error), degrade gracefully — proceed to the consolidated answer (which carries the full
+      // expert context) rather than failing the turn — but surface that reasoning was unavailable
+      // instead of silently emitting an empty trace as if the reasoning phase had succeeded.
+      const reasonFailed = reason.status === "error";
+      const reasonTrace = reasonFailed ? "" : reason.text;
+      if (reasonFailed) {
+        log.warn("fusion.reason_failed", { requestId: cfg.requestId, modelId: compiler, error: reason.error });
+      }
+      const reasoningTokens = estTok(reasonTrace);
+      emit("reason.done", { reasoningTokens, ...(reasonFailed ? { failed: true } : {}) });
 
       const answer = await streamOne({
         role: "fusion-answer",
@@ -270,12 +311,22 @@ export async function runTurn(db: DB, cfg: RunTurnCfg, emit: Emit): Promise<RunT
         prompt: cfg.prompt,
         lang: cfg.lang,
         trio: cfg.trio,
+        expertAnswers,
         memory: answerPreamble,
+        history: cfg.history,
         signal: cfg.signal,
         onDelta: (delta) => emit("answer.delta", { delta }),
       });
       const fusionLatency = Math.round(performance.now() - tF0);
-      const fusionInput = 200 + memTok + surviving.reduce((a, e) => a + estTok(e.text), 0);
+      // Input the compiler actually receives: the user prompt + a small instruction overhead +
+      // injected memory + every surviving expert's full answer (now genuinely sent). The compiler
+      // also receives the Deep Research / Agents preamble, so apply the same inflate() overhead the
+      // single + expert calls use — otherwise that context is sent but not billed.
+      const fusionInput = inflate(
+        estTok(cfg.prompt) + 200 + memTok + historyTok + surviving.reduce((a, e) => a + estTok(e.text), 0),
+        cfg.deepResearch,
+        cfg.deepAgents,
+      );
 
       if (answer.status === "error") {
         // The compiler failed (e.g. rate-limited). Keep the experts visible, surface the
@@ -286,7 +337,8 @@ export async function runTurn(db: DB, cfg: RunTurnCfg, emit: Emit): Promise<RunT
           experts: expertPayload,
           fusion: {
             modelId: compiler,
-            reasonText: reason.text,
+            reasonText: reasonTrace,
+            ...(reasonFailed ? { reasonFailed: true } : {}),
             answerText: "",
             answerError: answer.error || "The compiler model is unavailable",
             inputTokens: 0,
@@ -296,42 +348,42 @@ export async function runTurn(db: DB, cfg: RunTurnCfg, emit: Emit): Promise<RunT
             platformFeeMicro: 0,
           },
         };
-        // skip the success billing/payload below
-        // eslint-disable-next-line no-constant-condition
       } else {
-      const billedFusion = await persistUsage(
-        "fusion",
-        compiler,
-        fusionInput,
-        answer.outputTokens,
-        reasoningTokens,
-        fusionLatency,
-        "ok",
-      );
-      emit("call.usage", {
-        modelId: compiler,
-        role: "fusion",
-        inputTokens: fusionInput,
-        outputTokens: answer.outputTokens,
-        reasoningTokens,
-        costMicro: billedFusion.costMicro,
-        platformFeeMicro: billedFusion.platformFeeMicro,
-        status: "ok",
-      });
-
-      payload = {
-        experts: expertPayload,
-        fusion: {
+        // Success: bill the single fusion record (reason + answer compile = one compiler unit).
+        const billedFusion = await persistUsage(
+          "fusion",
+          compiler,
+          fusionInput,
+          answer.outputTokens,
+          reasoningTokens,
+          fusionLatency,
+          "ok",
+        );
+        emit("call.usage", {
           modelId: compiler,
-          reasonText: reason.text,
-          answerText: answer.text,
+          role: "fusion",
           inputTokens: fusionInput,
           outputTokens: answer.outputTokens,
           reasoningTokens,
           costMicro: billedFusion.costMicro,
           platformFeeMicro: billedFusion.platformFeeMicro,
-        },
-      };
+          status: "ok",
+        });
+
+        payload = {
+          experts: expertPayload,
+          fusion: {
+            modelId: compiler,
+            reasonText: reasonTrace,
+            ...(reasonFailed ? { reasonFailed: true } : {}),
+            answerText: answer.text,
+            inputTokens: fusionInput,
+            outputTokens: answer.outputTokens,
+            reasoningTokens,
+            costMicro: billedFusion.costMicro,
+            platformFeeMicro: billedFusion.platformFeeMicro,
+          },
+        };
       }
     }
   }
@@ -342,20 +394,23 @@ export async function runTurn(db: DB, cfg: RunTurnCfg, emit: Emit): Promise<RunT
   // attach real research sources so they restore on conversation reload
   if (researchSources.length) payload.sources = researchSources;
 
-  // persist assistant message + flip turn status
+  // persist assistant message + flip turn status — atomically, so the turn is never left
+  // "streaming" with an orphan message (or marked done with no message) on a mid-write failure.
   const messageId = randomUUID();
   const now = Date.now();
-  await db.insert(messages).values({
-    id: messageId,
-    conversationId: cfg.conversationId,
-    turnId: cfg.turnId,
-    role: "assistant",
-    mode: cfg.mode,
-    payloadJson: JSON.stringify(payload),
-    seq: 1,
-    createdAt: now,
+  await db.transaction(async (tx) => {
+    await tx.insert(messages).values({
+      id: messageId,
+      conversationId: cfg.conversationId,
+      turnId: cfg.turnId,
+      role: "assistant",
+      mode: cfg.mode,
+      payloadJson: JSON.stringify(payload),
+      seq: 1,
+      createdAt: now,
+    });
+    await tx.update(turns).set({ status: turnStatus }).where(eq(turns.id, cfg.turnId));
   });
-  await db.update(turns).set({ status: turnStatus }).where(eq(turns.id, cfg.turnId));
 
   emit("turn.usage", {
     turnTok: tokens,

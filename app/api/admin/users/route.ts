@@ -5,15 +5,9 @@ import { requireAdmin } from "@/lib/server/auth/guard";
 import { hashPassword } from "@/lib/server/auth/password";
 import { seedNewUser } from "@/lib/server/db/seed";
 import { users, usageRecords } from "@/lib/server/db/schema";
+import { isUniqueViolation } from "@/lib/server/db/errors";
 import { normalizeEmail } from "@/lib/server/contracts/auth";
 import { AdminUserCreate } from "@/lib/server/contracts/profile";
-
-/** True for a Postgres unique-constraint violation (SQLSTATE 23505), however the driver wraps it. */
-function isUniqueViolation(e: unknown): boolean {
-  const err = e as { code?: string; cause?: { code?: string }; message?: string };
-  const code = err?.code ?? err?.cause?.code;
-  return code === "23505" || /duplicate key value|unique constraint/i.test(String(err?.message ?? ""));
-}
 
 /** GET /api/admin/users — admin: list every user with lifetime usage stats. */
 export const GET = route(

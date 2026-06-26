@@ -15,3 +15,5 @@ vi.mock("@/lib/server/llm/gateway", async (importOriginal) => {
 process.env.AI_GATEWAY_API_KEY = process.env.AI_GATEWAY_API_KEY || "test-gateway-key";
 process.env.PLATFORM_FEE_CNY = process.env.PLATFORM_FEE_CNY || "0.05";
 process.env.APP_SECRET = process.env.APP_SECRET || "test-secret";
+// Deterministic, network-free embeddings for the semantic-memory tests (hashed bag-of-tokens).
+process.env.EMBEDDINGS_FAKE = "1";

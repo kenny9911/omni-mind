@@ -51,6 +51,8 @@ export interface FusionState {
   done: boolean;
   /** set when the compiler model failed (e.g. rate-limited); shown inline on the fusion card */
   answerError?: string | null;
+  /** set when the reasoning-trace call failed but the answer still ran (graceful degradation) */
+  reasonFailed?: boolean;
   // transient wall-clock markers
   rt0?: number;
   at0?: number;

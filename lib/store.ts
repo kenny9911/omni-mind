@@ -49,6 +49,7 @@ interface PersistedTurn {
       reasonText?: string;
       answerText?: string;
       answerError?: string | null;
+      reasonFailed?: boolean;
       inputTokens?: number;
     };
   };
@@ -58,6 +59,14 @@ interface PersistedTurn {
 function streamCallFromPersisted(c: PersistedCall): StreamCall {
   const full = c.text ?? "";
   return { modelId: c.modelId, full, shown: full.length, delay: 0, inTok: Number(c.inputTokens) || 0, done: true };
+}
+
+/** Client-side mirror of the server's truncate(s, 40) — used only as a fallback title
+ *  for an optimistic recents entry when the server didn't emit one (defensive). */
+function truncateTitle(s: string): string {
+  const t = (s || "").trim();
+  if (!t) return "New chat";
+  return t.length <= 40 ? t : t.slice(0, 39) + "…";
 }
 
 /** Map one persisted turn → a completed AssistantMessage for the chat view. */
@@ -98,6 +107,7 @@ function hydrateAssistant(id: number, conversationId: string, tn: PersistedTurn)
       inTok: Number(f.inputTokens) || 0,
       done: true,
       answerError: f.answerError ?? null,
+      reasonFailed: !!f.reasonFailed,
     };
   }
   return msg;
@@ -542,10 +552,20 @@ export class OmniStore {
           case "turn.start": {
             if (typeof d.turnId === "string") asst.serverTurnId = d.turnId;
             if (typeof d.conversationId === "string") {
-              asst.serverConversationId = d.conversationId;
-              // Pin the active conversation so the next turn threads into it
-              // (and so the sidebar can highlight the open conversation).
-              this.state.activeConversationId = d.conversationId;
+              const convId = d.conversationId;
+              asst.serverConversationId = convId;
+              // Pin the active conversation so the next turn threads into it (and the sidebar
+              // highlights it); for a freshly-created conversation, prepend it to the recents NOW
+              // so the chat appears in history immediately (previously only after a reload).
+              // Routed through this.set() — an immutable patch + notify — never a raw state mutation.
+              const patch: Partial<OmniState> = { activeConversationId: convId };
+              if (!this.state.serverRecents.some((r) => r.id === convId)) {
+                const title =
+                  typeof d.title === "string" && d.title.trim() ? d.title.trim() : truncateTitle(asst.promptText);
+                const color = typeof d.color === "string" && d.color ? d.color : "#4d6bfe";
+                patch.serverRecents = [{ id: convId, title, color }, ...this.state.serverRecents];
+              }
+              this.set(patch);
             }
             break;
           }
@@ -630,7 +650,11 @@ export class OmniStore {
             break;
           }
           case "reason.done": {
-            if (asst.fusion) asst.fusion.reasonDone = true;
+            if (asst.fusion) {
+              asst.fusion.reasonDone = true;
+              // Server signals a failed (best-effort) reasoning trace; the answer still runs.
+              if (d.failed) asst.fusion.reasonFailed = true;
+            }
             break;
           }
           case "answer.delta": {

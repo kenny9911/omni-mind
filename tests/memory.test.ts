@@ -6,42 +6,64 @@ import { userMemory } from "@/lib/server/db/schema";
 import { POST as signup } from "@/app/api/auth/signup/route";
 import { GET as memGet, DELETE as memClear } from "@/app/api/memory/route";
 import {
-  _mergeFacts,
+  mergeEntries,
   formatMemoryForPrompt,
   loadMemoryFacts,
   learnFromTurn,
   MEMORY_LIMITS,
+  type MemoryFact,
 } from "@/lib/server/llm/memory";
 
-describe("context memory — merge/format (pure)", () => {
-  it("dedupes case-insensitively and trims/normalizes", () => {
-    const out = _mergeFacts(
-      ["Uses Python"],
-      ["  uses   python ", "Prefers concise answers", "Prefers concise answers"],
+const f = (text: string, importance = 2, lastSeen = 1000, category = "other"): MemoryFact => ({ text, category, importance, lastSeen });
+
+describe("context memory — structured merge/format (pure)", () => {
+  it("dedupes case-insensitively, trims, and keeps the higher importance on collision", () => {
+    const out = mergeEntries(
+      [f("Uses Python", 2)],
+      [f("  uses   python ", 3), f("Prefers concise answers", 1), f("Prefers concise answers", 1)],
     );
-    expect(out).toEqual(["Uses Python", "Prefers concise answers"]);
+    expect(out.map((x) => x.text)).toEqual(["Uses Python", "Prefers concise answers"]);
+    expect(out[0].importance).toBe(3); // collision kept the higher importance
   });
 
-  it("caps to MAX_FACTS, keeping the newest", () => {
-    const existing = Array.from({ length: MEMORY_LIMITS.MAX_FACTS }, (_, i) => `fact ${i}`);
-    const out = _mergeFacts(existing, ["brand new fact"]);
+  it("caps to MAX_FACTS, keeping most-important then most-recent", () => {
+    const existing = Array.from({ length: MEMORY_LIMITS.MAX_FACTS }, (_, i) => f(`fact ${i}`, 2, i + 1));
+    const out = mergeEntries(existing, [f("brand new fact", 2, 999999)]);
     expect(out).toHaveLength(MEMORY_LIMITS.MAX_FACTS);
-    expect(out[out.length - 1]).toBe("brand new fact");
-    expect(out).not.toContain("fact 0"); // oldest dropped
+    expect(out.map((x) => x.text)).toContain("brand new fact");
+    expect(out.map((x) => x.text)).not.toContain("fact 0"); // oldest (lowest lastSeen) dropped
+  });
+
+  it("an importance=3 (pinned) fact always survives the cap", () => {
+    const existing = [f("CORE: user is a doctor", 3, 1), ...Array.from({ length: MEMORY_LIMITS.MAX_FACTS }, (_, i) => f(`minor ${i}`, 1, i + 10))];
+    const out = mergeEntries(existing, []);
+    expect(out).toHaveLength(MEMORY_LIMITS.MAX_FACTS);
+    expect(out.map((x) => x.text)).toContain("CORE: user is a doctor");
   });
 
   it("truncates an over-long fact to MAX_FACT_LEN", () => {
     const long = "x".repeat(MEMORY_LIMITS.MAX_FACT_LEN + 50);
-    const out = _mergeFacts([], [long]);
-    expect(out[0].length).toBe(MEMORY_LIMITS.MAX_FACT_LEN);
+    const out = mergeEntries([], [f(long)]);
+    expect(out[0].text.length).toBe(MEMORY_LIMITS.MAX_FACT_LEN);
   });
 
-  it("formatMemoryForPrompt is undefined when empty, compact bullets otherwise", () => {
+  it("formatMemoryForPrompt: undefined when empty; compact bullets; accepts plain strings", () => {
     expect(formatMemoryForPrompt([])).toBeUndefined();
-    const p = formatMemoryForPrompt(["Uses Rust", "Lives in Tokyo"]);
+    const p = formatMemoryForPrompt(["Uses Rust", "Lives in Tokyo"]); // back-compat string[]
     expect(p).toContain("- Uses Rust");
     expect(p).toContain("- Lives in Tokyo");
     expect(p!.split("\n")).toHaveLength(3); // header + 2 bullets
+  });
+
+  it("formatMemoryForPrompt with a query injects only the most RELEVANT facts (≤ MAX_INJECT)", () => {
+    const many = [
+      ...Array.from({ length: 8 }, (_, i) => f(`unrelated note number ${i}`, 1)),
+      f("the user loves kubernetes and helm", 2),
+    ];
+    const p = formatMemoryForPrompt(many, "help me debug a kubernetes pod");
+    const bullets = p!.split("\n").length - 1; // minus header
+    expect(bullets).toBeLessThanOrEqual(MEMORY_LIMITS.MAX_INJECT);
+    expect(p).toContain("kubernetes and helm"); // the query-relevant fact is selected
   });
 });
 

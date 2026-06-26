@@ -49,6 +49,7 @@ export interface Dict {
   synthesizing: string;
   waiting: string;
   thinkingProcess: string;
+  reasoningUnavailable: string;
   finalAnswer: string;
   copy: string;
   copied: string;
@@ -195,7 +196,7 @@ const D: Record<Lang, Omit<Dict, "researchSteps">> = {
     auto: "自动调度", mainModel: "主模型", deepResearch: "深度研究", deepAgents: "深度智能体",
     placeholder: "输入任意问题，让最合适的模型为你解答…", send: "发送",
     experts: "专家模型并行", fusing: "智能融合", fusedAnswer: "融合答案", fusedBy: "综合多个专家的最优论点", compiledBy: "融合器",
-    thinking: "思考中", synthesizing: "融合中", waiting: "等待专家回答完成…", thinkingProcess: "思考过程", finalAnswer: "最终答案", copy: "复制", copied: "已复制", edit: "编辑", rerun: "重新生成", sourcesLabel: "来源",
+    thinking: "思考中", synthesizing: "融合中", waiting: "等待专家回答完成…", thinkingProcess: "思考过程", reasoningUnavailable: "本次推理过程不可用（已直接生成答案）", finalAnswer: "最终答案", copy: "复制", copied: "已复制", edit: "编辑", rerun: "重新生成", sourcesLabel: "来源",
     turnFailed: "请求未完成",
     thisTurn: "本次用量", tokens: "Tokens", cost: "成本", platformFee: "平台费", total: "合计", callsX: " 次调用",
     emptyTitle: "问一次，多个专家为你作答", emptySub: "快速模式让最合适的单模型极速直答；多专家模式并行调用多个模型，再融合出最优答案。每一次 Token 消耗与费用全程透明、精确可查。",
@@ -244,7 +245,7 @@ const D: Record<Lang, Omit<Dict, "researchSteps">> = {
     auto: "Auto-route", mainModel: "Main model", deepResearch: "Deep Research", deepAgents: "Deep Agents",
     placeholder: "Ask anything — the right model will answer…", send: "Send",
     experts: "Experts in parallel", fusing: "Fusion", fusedAnswer: "Fused answer", fusedBy: "best points from multiple experts", compiledBy: "compiled by",
-    thinking: "Thinking", synthesizing: "Synthesizing", waiting: "Waiting for experts to finish…", thinkingProcess: "Thinking", finalAnswer: "Final answer", copy: "Copy", copied: "Copied", edit: "Edit", rerun: "Regenerate", sourcesLabel: "Sources",
+    thinking: "Thinking", synthesizing: "Synthesizing", waiting: "Waiting for experts to finish…", thinkingProcess: "Thinking", reasoningUnavailable: "Reasoning trace unavailable (answer generated directly)", finalAnswer: "Final answer", copy: "Copy", copied: "Copied", edit: "Edit", rerun: "Regenerate", sourcesLabel: "Sources",
     turnFailed: "Couldn't complete",
     thisTurn: "This turn", tokens: "Tokens", cost: "Cost", platformFee: "Platform", total: "Total", callsX: " calls",
     emptyTitle: "Ask once, multiple experts answer", emptySub: "Fast mode routes to the single best model for an instant reply. Multi-expert mode runs multiple models in parallel and fuses them into the best answer. Every token and every cost is tracked precisely.",
@@ -293,7 +294,7 @@ const D: Record<Lang, Omit<Dict, "researchSteps">> = {
     auto: "自動調度", mainModel: "主模型", deepResearch: "深度研究", deepAgents: "深度智能體",
     placeholder: "輸入任意問題，讓最合適的模型為你解答…", send: "發送",
     experts: "專家模型並行", fusing: "智能融合", fusedAnswer: "融合答案", fusedBy: "綜合多個專家的最優論點", compiledBy: "融合器",
-    thinking: "思考中", synthesizing: "融合中", waiting: "等待專家回答完成…", thinkingProcess: "思考過程", finalAnswer: "最終答案", copy: "複製", copied: "已複製", edit: "編輯", rerun: "重新生成", sourcesLabel: "來源",
+    thinking: "思考中", synthesizing: "融合中", waiting: "等待專家回答完成…", thinkingProcess: "思考過程", reasoningUnavailable: "本次推理過程不可用（已直接生成答案）", finalAnswer: "最終答案", copy: "複製", copied: "已複製", edit: "編輯", rerun: "重新生成", sourcesLabel: "來源",
     turnFailed: "請求未完成",
     thisTurn: "本次用量", tokens: "Tokens", cost: "成本", platformFee: "平台費", total: "合計", callsX: " 次調用",
     emptyTitle: "問一次，多個專家為你作答", emptySub: "快速模式讓最合適的單模型極速直答；多專家模式並行調用多個模型，再融合出最優答案。每一次 Token 消耗與費用全程透明、精確可查。",
@@ -342,7 +343,7 @@ const D: Record<Lang, Omit<Dict, "researchSteps">> = {
     auto: "自動振り分け", mainModel: "メインモデル", deepResearch: "ディープリサーチ", deepAgents: "ディープエージェント",
     placeholder: "なんでも入力してください — 最適なモデルが答えます…", send: "送信",
     experts: "エキスパート並列", fusing: "融合", fusedAnswer: "融合された回答", fusedBy: "複数の専門家の最良の論点を統合", compiledBy: "融合器",
-    thinking: "思考中", synthesizing: "融合中", waiting: "専門家の回答を待機中…", thinkingProcess: "思考プロセス", finalAnswer: "最終回答", copy: "コピー", copied: "コピー済み", edit: "編集", rerun: "再生成", sourcesLabel: "出典",
+    thinking: "思考中", synthesizing: "融合中", waiting: "専門家の回答を待機中…", thinkingProcess: "思考プロセス", reasoningUnavailable: "推論トレースは利用できません（回答は直接生成されました）", finalAnswer: "最終回答", copy: "コピー", copied: "コピー済み", edit: "編集", rerun: "再生成", sourcesLabel: "出典",
     turnFailed: "完了できませんでした",
     thisTurn: "今回の使用量", tokens: "トークン", cost: "コスト", platformFee: "手数料", total: "合計", callsX: " 回呼出",
     emptyTitle: "一度の質問に、複数の専門家が回答", emptySub: "高速モードは最適な単一モデルが即座に回答。マルチエキスパートモードは複数のモデルを並列で動かし、最良の回答へ融合します。すべてのトークンとコストを正確に記録します。",

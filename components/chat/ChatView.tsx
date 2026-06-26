@@ -337,7 +337,7 @@ function FusionCard({ m, vm }: { m: AssistantMsgVM; vm: ViewModel }) {
             <div style={{ border: "1px solid var(--border)", borderRadius: 12, background: "var(--surface-3)", marginBottom: 14, overflow: "hidden" }}>
               <div onClick={f.onToggle} style={{ display: "flex", alignItems: "center", gap: 9, padding: "10px 13px", cursor: "pointer", userSelect: "none" }}>
                 {f.reasonActive && <span style={{ width: 13, height: 13, border: "2px solid var(--border-2)", borderTopColor: "var(--accent)", borderRadius: "50%", animation: "spin .8s linear infinite", flex: "none" }} />}
-                {f.reasonDone && (
+                {f.reasonDone && !f.reasonFailed && (
                   <span style={{ color: "var(--success)", display: "flex", flex: "none" }}>
                     <Icon name="check" />
                   </span>
@@ -351,7 +351,11 @@ function FusionCard({ m, vm }: { m: AssistantMsgVM; vm: ViewModel }) {
               {f.expanded && (
                 <div style={{ padding: "2px 14px 13px 14px" }}>
                   <div style={{ borderLeft: "2px solid var(--accent)", paddingLeft: 13, whiteSpace: "pre-wrap", lineHeight: 1.7, fontSize: 12.5, color: "var(--muted)" }}>
-                    {f.reasonText}
+                    {f.reasonFailed && !f.reasonText ? (
+                      <span style={{ fontStyle: "italic", color: "var(--faint)" }}>{t.reasoningUnavailable}</span>
+                    ) : (
+                      f.reasonText
+                    )}
                     {f.reasonStreaming && <span style={{ color: "var(--accent)", animation: "blink 1s infinite" }}>▍</span>}
                     {f.reasonThinking && <ThinkingDots color="var(--accent)" size={5} />}
                   </div>

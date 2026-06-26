@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { pgTable, text, integer, bigint, boolean, primaryKey, index, uniqueIndex } from "drizzle-orm/pg-core";
 
 /**
@@ -28,6 +29,10 @@ export const users = pgTable(
     oauthProvider: text("oauth_provider"), // 'google' | null
     googleSub: text("google_sub"), // Google's stable subject id; null unless linked
     avatarUrl: text("avatar_url"), // provider profile picture URL; null otherwise
+    // context-engineering L0: a stable ~250-token "core profile" of the user (name, language,
+    // expertise, pinned facts), rewritten when a high-importance fact appears; injected first.
+    userProfile: text("user_profile"),
+    userProfileAt: bigint("user_profile_at", { mode: "number" }),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
     updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   },
@@ -81,6 +86,14 @@ export const conversations = pgTable(
     color: text("color").notNull(),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
     updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+    // context-engineering L2 (cross-session): a short digest of this conversation, refreshed as
+    // it grows; the most recent few are injected as "Previous sessions" when a NEW conversation starts.
+    conversationDigest: text("conversation_digest"),
+    digestEmbedding: text("digest_embedding"), // JSON-encoded embedding of the digest (semantic session recall)
+    digestTurnCount: integer("digest_turn_count").notNull().default(0),
+    // rolling summary (Phase 2): compacted head of the conversation + the turn it covers up to.
+    conversationSummary: text("conversation_summary"),
+    summaryUpToTurn: integer("summary_up_to_turn").notNull().default(0),
   },
   (t) => [index("ix_conv_user_updated").on(t.userId, t.updatedAt)],
 );
@@ -103,7 +116,12 @@ export const turns = pgTable(
     status: text("status").notNull().default("streaming"), // streaming|done|failed|partial
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
   },
-  (t) => [index("ix_turns_conv").on(t.conversationId, t.createdAt), index("ix_turns_user").on(t.userId, t.createdAt)],
+  (t) => [
+    index("ix_turns_conv").on(t.conversationId, t.createdAt),
+    index("ix_turns_user").on(t.userId, t.createdAt),
+    // At most one streaming turn per conversation — the DB-level single-flight guard.
+    uniqueIndex("ux_turns_one_streaming").on(t.conversationId).where(sql`${t.status} = 'streaming'`),
+  ],
 );
 
 export const messages = pgTable(

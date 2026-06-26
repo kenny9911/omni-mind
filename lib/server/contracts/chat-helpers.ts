@@ -1,8 +1,9 @@
-import { eq, and } from "drizzle-orm";
+import { eq, and, or, lt, desc, inArray } from "drizzle-orm";
 import { MODEL_MAP } from "@/lib/models";
 import type { Lang, Mode } from "@/lib/types";
 import type { DB } from "../db/client";
-import { preferences, modelState, turns } from "../db/schema";
+import { preferences, modelState, turns, messages } from "../db/schema";
+import { log } from "../log/logger";
 import type { ChatBodyT } from "./chat";
 
 /**
@@ -80,6 +81,95 @@ export async function langFor(db: DB, userId: string): Promise<Lang> {
     .where(eq(preferences.userId, userId))
     .limit(1);
   return (pref?.lang ?? "zh") as Lang;
+}
+
+export interface HistoryMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/** Max prior turns of context fed to the models — keeps token cost bounded on long chats. */
+export const MAX_HISTORY_TURNS = 10;
+/** Per-message hard cap (chars) so one giant prior answer can't bloat the prompt. A future
+ *  summarization layer will compress further; this is the immediate guardrail. */
+export const MAX_HISTORY_MSG_CHARS = 4000;
+
+/** Extract the final user-facing answer text from a stored assistant message payload. */
+function finalAnswerText(payload: unknown): string {
+  const p = payload as { single?: { text?: string }; fusion?: { answerText?: string } } | null;
+  return p?.single?.text || p?.fusion?.answerText || "";
+}
+
+/** Cap a history message so a single huge turn can't dominate the context window. */
+function capHistory(s: string): string {
+  return s.length <= MAX_HISTORY_MSG_CHARS ? s : s.slice(0, MAX_HISTORY_MSG_CHARS) + " …[truncated]";
+}
+
+/**
+ * Build the prior conversation as alternating user/assistant messages (oldest→newest) so the
+ * models have multi-turn context — without this, a follow-up like "好" is sent with no history
+ * and the models answer as if it were a brand-new chat. Only COMPLETE exchanges (a user prompt
+ * AND a non-empty final answer) are included, which guarantees strict role alternation.
+ *
+ * The window is bounded in SQL (ORDER BY created_at DESC … LIMIT, on ix_turns_conv) so the read
+ * stays O(maxTurns) regardless of conversation length. `beforeCreatedAt` (+ `beforeTurnId` to
+ * break exact-timestamp ties) restricts to turns strictly before a given turn — used by
+ * regenerate so a re-run sees only what preceded the turn being regenerated.
+ */
+export async function loadConversationHistory(
+  db: DB,
+  conversationId: string,
+  opts: { beforeCreatedAt?: number; beforeTurnId?: string; maxTurns?: number } = {},
+): Promise<HistoryMessage[]> {
+  const maxTurns = opts.maxTurns ?? MAX_HISTORY_TURNS;
+  const conds = [eq(turns.conversationId, conversationId)];
+  if (opts.beforeCreatedAt != null) {
+    conds.push(
+      opts.beforeTurnId
+        ? or(
+            lt(turns.createdAt, opts.beforeCreatedAt),
+            and(eq(turns.createdAt, opts.beforeCreatedAt), lt(turns.id, opts.beforeTurnId)),
+          )!
+        : lt(turns.createdAt, opts.beforeCreatedAt),
+    );
+  }
+
+  // Newest maxTurns turns (index-backed), then reverse to oldest→newest for the prompt.
+  const recent = (
+    await db
+      .select({ id: turns.id, promptText: turns.promptText, createdAt: turns.createdAt })
+      .from(turns)
+      .where(and(...conds))
+      .orderBy(desc(turns.createdAt), desc(turns.id))
+      .limit(maxTurns)
+  ).reverse();
+  if (recent.length === 0) return [];
+
+  const ids = recent.map((t) => t.id);
+  const asstRows = await db
+    .select({ turnId: messages.turnId, payloadJson: messages.payloadJson })
+    .from(messages)
+    .where(and(inArray(messages.turnId, ids), eq(messages.seq, 1)));
+  const answerByTurn = new Map<string, string>();
+  for (const m of asstRows) {
+    let payload: unknown = {};
+    try {
+      payload = JSON.parse(m.payloadJson);
+    } catch {
+      // Corrupt payload → this exchange is skipped below; log it so silent history gaps are visible.
+      log.warn("history.payload_unparseable", { turnId: m.turnId });
+    }
+    answerByTurn.set(m.turnId, finalAnswerText(payload));
+  }
+
+  const history: HistoryMessage[] = [];
+  for (const t of recent) {
+    const answer = answerByTurn.get(t.id) ?? "";
+    if (!t.promptText || !answer) continue; // complete exchanges only → roles stay alternating
+    history.push({ role: "user", content: capHistory(t.promptText) });
+    history.push({ role: "assistant", content: capHistory(answer) });
+  }
+  return history;
 }
 
 /** True iff a turn with status='streaming' exists in the conversation (single-flight). */

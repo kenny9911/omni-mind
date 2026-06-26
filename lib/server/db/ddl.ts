@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS users (
   oauth_provider TEXT,
   google_sub     TEXT,
   avatar_url     TEXT,
+  user_profile   TEXT,
+  user_profile_at BIGINT,
   created_at     BIGINT NOT NULL,
   updated_at     BIGINT NOT NULL
 );
@@ -62,7 +64,12 @@ CREATE TABLE IF NOT EXISTS conversations (
   title      TEXT NOT NULL,
   color      TEXT NOT NULL,
   created_at BIGINT NOT NULL,
-  updated_at BIGINT NOT NULL
+  updated_at BIGINT NOT NULL,
+  conversation_digest  TEXT,
+  digest_embedding     TEXT,
+  digest_turn_count    INTEGER NOT NULL DEFAULT 0,
+  conversation_summary TEXT,
+  summary_up_to_turn   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_conv_user_updated ON conversations (user_id, updated_at);
 
@@ -195,4 +202,16 @@ export const ADDITIVE_MIGRATIONS: string[] = [
   "CREATE UNIQUE INDEX IF NOT EXISTS ux_users_google_sub ON users (google_sub)",
   // Account lifecycle: existing rows default to 'active' (login unaffected).
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'",
+  // Single-flight: at most one streaming turn per conversation. Enforced in Postgres so a
+  // concurrent double-submit can't slip past the read-then-insert (TOCTOU) check in the
+  // chat/regenerate handlers — the second insert fails with 23505 → 409 STREAM_IN_PROGRESS.
+  "CREATE UNIQUE INDEX IF NOT EXISTS ux_turns_one_streaming ON turns (conversation_id) WHERE status = 'streaming'",
+  // Context-engineering: core profile (L0), cross-session digest (L2), rolling summary (Phase 2).
+  "ALTER TABLE users ADD COLUMN IF NOT EXISTS user_profile TEXT",
+  "ALTER TABLE users ADD COLUMN IF NOT EXISTS user_profile_at BIGINT",
+  "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS conversation_digest TEXT",
+  "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS digest_turn_count INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS conversation_summary TEXT",
+  "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summary_up_to_turn INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS digest_embedding TEXT",
 ];

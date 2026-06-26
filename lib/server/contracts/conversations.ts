@@ -42,7 +42,7 @@ export function decodeCursor(cursor: string): { updatedAt: number; id: string } 
 }
 
 /** DTO for POST/PATCH responses — the full conversation record. */
-export function toConversationDTO(c: Conversation) {
+export function toConversationDTO(c: Pick<Conversation, "id" | "title" | "color" | "createdAt" | "updatedAt">) {
   return {
     id: c.id,
     title: c.title,

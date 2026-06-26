@@ -124,6 +124,7 @@ export interface FusionVM {
   reasonStreaming: boolean;
   reasonThinking: boolean;
   reasonDone: boolean;
+  reasonFailed: boolean;
   showAnswer: boolean;
   answerText: string;
   answerError?: string | null;
@@ -558,8 +559,9 @@ function viewMessages(store: OmniStore, s: OmniState, t: Dict): MessageVM[] {
         reasonText: reasonTxt,
         reasonActive: fz.started && !fz.reasonDone,
         reasonStreaming: fz.started && !fz.reasonDone && fz.reasonShown > 0,
-        reasonThinking: fz.started && fz.reasonShown <= 0 && !fz.reasonDone,
+        reasonThinking: fz.started && fz.reasonShown <= 0 && !fz.reasonDone && !fz.reasonFailed,
         reasonDone: fz.reasonDone,
+        reasonFailed: !!fz.reasonFailed,
         showAnswer: fz.reasonDone,
         answerText: ansTxt,
         answerError: fz.answerError ?? null,
