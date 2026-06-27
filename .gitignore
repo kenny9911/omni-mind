@@ -16,3 +16,7 @@ next-env.d.ts
 # design handoff reference (not part of the app)
 /_handoff
 /design_*.html
+
+# Claude Code runtime artifacts (transient)
+/.claude/scheduled_tasks.lock
+/.claude/worktrees
